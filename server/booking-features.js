@@ -4,6 +4,7 @@ const crypto=require('node:crypto');
 const {makeSeats}=require('./catalog');
 const {checkoutIdempotency}=require('./checkout-idempotency');
 const {bookingTermsVersion,validateBookingVersion,validateExpectedTotal}=require('./booking-terms');
+const {validateSourceVersion}=require('./reschedule-state');
 const BOOKING_LEAD_MINUTES=30;
 
 function createBookingFeatures(ctx) {
@@ -255,7 +256,7 @@ function createBookingFeatures(ctx) {
       });
       res.json(prices);
     }));
-    router.post('/bookings/:code/reschedule',endpoint(async (req,res) => res.json({booking:await reschedule(req,false)})));
+    router.post('/bookings/:code/reschedule',endpoint(async (req,res) => {const result=await reschedule(req,false);if(result.replayed)res.set('Idempotency-Replayed','true');res.json(result);}));
   }
   async function validatePromotion(input,current={}) {
     for(const key of ['active','roundTripOnly'])if(input[key]!==undefined && typeof input[key]!=='boolean')fail(400,'Trạng thái '+key+' phải là true hoặc false.');
@@ -284,35 +285,53 @@ function createBookingFeatures(ctx) {
   async function reschedule(req,staff) {
     const code=clean(req.params.code,30).toUpperCase(),initial=await getBooking(code);if(!initial) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
     if (staff) scope(req,initial.trip.operatorId);else if (!bookingOwner(req,initial)) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
-    const targetId=clean(req.body.tripId),orderRows=initial.orderCode ? await db.all('SELECT trip_id FROM bookings WHERE order_code=?',[initial.orderCode]) : [];
-    return db.transaction(async tx => {
+    const idempotency=checkoutIdempotency(req,fail),targetId=clean(req.body.tripId);
+    const retryReplay=new Error('Reschedule replay moved while acquiring locks');
+    for(let attempt=0;attempt<3;attempt++)try{return await db.transaction(async tx => {
+      if (idempotency && db.dialect === 'postgres') await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',[idempotency.keyHash]);
       if(staff)await staffActor(tx,req);
-      const lockedTrips=await lockTrips(tx,[initial.tripId,targetId,...orderRows.map(row=>row.trip_id)]);
-      if(staff){scope(req,lockedTrips.get(initial.tripId).operator_id);scope(req,lockedTrips.get(targetId).operator_id);}
-      await expire(tx,initial.tripId); if (targetId !== initial.tripId) await expire(tx,targetId);
+      const previous=idempotency ? await tx.get('SELECT request_hash,result FROM checkout_requests WHERE key_hash=?',[idempotency.keyHash]) : null;
+      const current=await getBooking(code,tx);if(!current)fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
+      if (staff) scope(req,current.trip.operatorId);else if (!bookingOwner(req,current)) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
+      if (!previous) {validateSourceVersion(req.body.expectedSourceVersion,fail);validateLeg(req.body);}
+      const orderRows=!previous && current.orderCode ? await tx.all('SELECT trip_id FROM bookings WHERE order_code=?',[current.orderCode]) : [];
+      const lockedTrips=await lockTrips(tx,previous ? [current.tripId] : [current.tripId,targetId,...orderRows.map(row=>row.trip_id)]);
+      if (!previous) {await expire(tx,current.tripId);if(targetId !== current.tripId)await expire(tx,targetId);}
       const row=await tx.get('SELECT * FROM bookings WHERE code=?'+lock,[code]),booking=await getBooking(code,tx);
-      if (row.trip_id !== initial.tripId) fail(409,'Vé vừa được thay đổi. Vui lòng tải lại.','CONFLICT');
+      if (previous && row.trip_id !== current.tripId) throw retryReplay;
+      if (staff) scope(req,booking.trip.operatorId);else if (!bookingOwner(req,booking)) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
+      if (previous) {
+        if(staff)scope(req,lockedTrips.get(booking.tripId).operator_id);
+        if (previous.request_hash !== idempotency.requestHash) fail(409,'Mã yêu cầu đã được dùng cho thao tác khác. Vui lòng dùng mã mới.','IDEMPOTENCY_CONFLICT');
+        return {booking,replayed:true};
+      }
+      if (req.body.expectedSourceVersion !== undefined && req.body.expectedSourceVersion !== booking.rescheduleVersion) fail(409,'Đặt chỗ đã thay đổi. Vui lòng kiểm tra và xác nhận lại chuyến cần đổi.','BOOKING_CHANGED');
+      if (row.trip_id !== current.tripId) fail(409,'Vé vừa được thay đổi. Vui lòng tải lại.','CONFLICT');
+      if(staff){scope(req,lockedTrips.get(current.tripId).operator_id);scope(req,lockedTrips.get(targetId).operator_id);}
       if (!['reserved','confirmed'].includes(row.status) || !['pending','paid'].includes(row.payment_status)) fail(409,'Vé ở trạng thái này không được đổi chuyến.','INVALID_TRANSITION');
       if (Date.parse(booking.trip.date+'T'+booking.trip.departureTime+':00+07:00')<=Date.now()+2*3600000) fail(409,'Chỉ đổi chuyến trước giờ khởi hành ít nhất hai giờ.','RESCHEDULE_CLOSED');
       const leg=await legInfo(tx,req.body,{minLeadMinutes:120,skipBookingCode:code});
       if (leg.trip.operatorId !== booking.trip.operatorId || leg.trip.from !== booking.trip.from || leg.trip.to !== booking.trip.to || leg.trip.source !== booking.source) fail(400,'Chỉ được đổi cùng nhà xe, cùng tuyến và cùng nguồn kho vé.','RESCHEDULE_ROUTE');
       if (leg.seats.length !== booking.seats.length || leg.subtotal !== (booking.subtotal ?? booking.total)) fail(409,'Chỉ hỗ trợ đổi cùng số hành khách và cùng giá gốc. Liên hệ nhà xe nếu có chênh lệch.','FARE_DIFFERENCE');
       const updated={...booking,tripId:leg.trip.id,trip:leg.trip,seats:leg.seats,pickup:leg.pickup,dropoff:leg.dropoff,previousTrips:[...(booking.previousTrips || []),{tripId:booking.tripId,date:booking.trip.date,departureTime:booking.trip.departureTime,seats:booking.seats,changedAt:now()}]};
+      delete updated.rescheduleVersion;
       if (booking.orderCode) {const order=await getOrder(booking.orderCode,tx);const orderLegs=order.bookings.map(b => {const item=b.code===code ? updated : b;return {trip:item.trip,seats:item.seats,departureAt:Date.parse(item.trip.date+'T'+item.trip.departureTime+':00+07:00')};}); if (order.bookings.every(b=>!['cancelled','expired','refund_pending'].includes(b.status))) roundTrip(orderLegs);}
       await tx.run('DELETE FROM reserved_seats WHERE booking_code=?',[code]); if (leg.holdHash) await clearHold(tx,leg.holdHash);
       for (const seat of leg.seats) await tx.run('INSERT INTO reserved_seats(trip_id,seat,booking_code) VALUES(?,?,?)',[leg.trip.id,seat,code]);
       await tx.run('UPDATE bookings SET trip_id=?,data=? WHERE code=?',[leg.trip.id,JSON.stringify(updated),code]);
       await audit(tx,code,req.user?.id || 'guest','rescheduled',{fromTrip:booking.tripId,toTrip:leg.trip.id,fromSeats:booking.seats,toSeats:leg.seats});
       if(staff)await adminAudit(tx,req,'booking_rescheduled','booking',code,leg.trip.operatorId,{fromTrip:booking.tripId,toTrip:leg.trip.id,fromSeats:booking.seats,toSeats:leg.seats});
-      return getBooking(code,tx);
-    });
+      if(idempotency)await tx.run('INSERT INTO checkout_requests(key_hash,request_hash,result,created_at) VALUES(?,?,?,?)',[idempotency.keyHash,idempotency.requestHash,JSON.stringify({bookingCodes:[code]}),now()]);
+      return {booking:await getBooking(code,tx)};
+    });}catch(error){if(error !== retryReplay)throw error;}
+    fail(503,'Đặt chỗ đang được cập nhật. Vui lòng thử lại cùng yêu cầu.','RESCHEDULE_RETRY');
   }
   function installAdmin(router) {
     router.get('/admin/promotions',requireAdmin,endpoint(async(req,res)=>{const rows=await db.all('SELECT * FROM promotions ORDER BY created_at DESC'),promotions=[];for(const row of rows)promotions.push(promoShape(row,await usageCount(db,row.code)));res.json({promotions});}));
     router.post('/admin/promotions',requireAdmin,endpoint(async(req,res)=>{const p=await validatePromotion(req.body);await db.transaction(async tx=>{await staffActor(tx,req);if(req.user.role!=='admin')fail(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN');if(await tx.get('SELECT code FROM promotions WHERE code=?',[p.code]))fail(409,'Mã ưu đãi đã tồn tại.','COUPON_EXISTS');await tx.run('INSERT INTO promotions(code,data,active,used_count,created_at) VALUES(?,?,?,0,?)',[p.code,JSON.stringify(p),p.active?1:0,now()]);await adminAudit(tx,req,'promotion_created','promotion',p.code,null,{active:p.active,type:p.type,value:p.value});});res.status(201).json({promotion:{...p,usedCount:0}});}));
     router.patch('/admin/promotions/:code',requireAdmin,endpoint(async(req,res)=>{const code=clean(req.params.code,32).toUpperCase();const p=await db.transaction(async tx=>{await staffActor(tx,req);if(req.user.role!=='admin')fail(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN');const row=await tx.get('SELECT * FROM promotions WHERE code=?'+lock,[code]);if(!row)fail(404,'Không tìm thấy ưu đãi.','NOT_FOUND');const p=await validatePromotion(req.body,{...parse(row.data),active:row.active===1});await tx.run('UPDATE promotions SET data=?,active=? WHERE code=?',[JSON.stringify(p),p.active?1:0,code]);await adminAudit(tx,req,'promotion_updated','promotion',code,null,{active:p.active,type:p.type,value:p.value});return p;});res.json({promotion:{...p,usedCount:await usageCount(db,code)}});}));
     router.delete('/admin/promotions/:code',requireAdmin,endpoint(async(req,res)=>{const code=clean(req.params.code,32).toUpperCase();await db.transaction(async tx=>{await staffActor(tx,req);if(req.user.role!=='admin')fail(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN');if(!await tx.get('SELECT code FROM promotions WHERE code=?'+lock,[code]))fail(404,'Không tìm thấy ưu đãi.','NOT_FOUND');await tx.run('UPDATE promotions SET active=0 WHERE code=?',[code]);await adminAudit(tx,req,'promotion_deactivated','promotion',code);});res.json({message:'Đã ngừng áp dụng mã ưu đãi.'});}));
-    router.post('/admin/bookings/:code/reschedule',endpoint(async(req,res)=>res.json({booking:await reschedule(req,true)})));
+    router.post('/admin/bookings/:code/reschedule',endpoint(async(req,res)=>{const result=await reschedule(req,true);if(result.replayed)res.set('Idempotency-Replayed','true');res.json(result);}));
     router.get('/admin/trips/:id/manifest',endpoint(async(req,res)=>{await refreshExpired();const trip=await getTrip(req.params.id);if(!trip)fail(404,'Không tìm thấy chuyến xe.','NOT_FOUND');scope(req,trip.operatorId);const rows=await db.all("SELECT code FROM bookings WHERE trip_id=? AND status IN ('reserved','confirmed','pending_payment') ORDER BY created_at",[trip.id]),passengers=[];for(const row of rows){const b=await getBooking(row.code);passengers.push({bookingCode:b.code,orderCode:b.orderCode || null,fullName:b.fullName,phone:b.phone,email:b.email,seats:b.seats,pickup:b.pickup,dropoff:b.dropoff,status:b.status,paymentStatus:b.paymentStatus,total:b.total,createdAt:b.createdAt,source:b.source});}res.json({trip,passengers,counts:{bookings:passengers.length,passengers:passengers.reduce((n,b)=>n+b.seats.length,0),seats:passengers.reduce((n,b)=>n+b.seats.length,0),paid:passengers.filter(b=>b.paymentStatus==='paid').length,unpaid:passengers.filter(b=>b.paymentStatus!=='paid').length}});}));
   }
   return {installPublic,installAdmin,checkout,notify,expireHolds,releasePromotion,ownerRead,ownsHold};

@@ -89,6 +89,18 @@ Trả `{order:{code,subtotal,discount,total,couponCode,bookings:[…]}}`. Hai l�
 - `GET /orders`: đơn thuộc tài khoản đang đăng nhập.
 - `POST /bookings/:code/reschedule`: `{tripId,seats,pickup,dropoff,phone}`. Kiểm tra quyền sở hữu, nhà xe, tuyến, nguồn, giờ đi và tiền vé; cập nhật ghế trong một giao dịch, lưu nhật ký. Chuyến đích cần cùng giá; thay đổi mức giá cần nhà xe xử lý.
 
+Đổi chuyến hỗ trợ `Idempotency-Key` ở cả endpoint khách và `/admin/bookings/:code/reschedule`. Client tạo khóa ngẫu nhiên và giữ nguyên body/path/key khi chưa rõ kết quả. Thử lại đúng yêu cầu đã hoàn tất trả HTTP 200, `replayed:true` và header `Idempotency-Replayed:true`; không chuyển ghế, tiêu thụ giữ chỗ hoặc ghi lịch sử/audit lần nữa. Response chứa vé ở trạng thái hiện tại, kể cả vé đã đổi tiếp hoặc bị hủy sau lần yêu cầu gốc. Replay vẫn kiểm tra quyền sở hữu/phạm vi nhân viên hiện tại; không cần giữ chỗ cũ còn hiệu lực hoặc chuyến đích cũ còn mở bán. Dùng khóa đã lưu cho body/path/mã vé khác trả `409 IDEMPOTENCY_CONFLICT`; lỗi trước commit không tiêu thụ khóa.
+
+Phạm vi khóa giống checkout: theo user ID với tài khoản đăng nhập, theo khóa khôi phục với khách vãng lai. Thử lại cần giữ cùng danh tính người gửi; khóa không thay thế số điện thoại hoặc quyền sở hữu vé.
+
+Nếu vé liên tục đổi chuyến trong lúc replay đang lấy khóa, máy chủ thử lấy lại trạng thái hiện tại tối đa ba lần, sau đó trả `503 RESCHEDULE_RETRY`. Client giữ nguyên body/key và thử lại; không tạo yêu cầu đổi mới. Khóa đã lưu không bị xóa và không có chuyển ghế/lịch sử phát sinh từ lần replay bị trì hoãn.
+
+Vé từ tra cứu và API đổi chuyến trả thêm `rescheduleVersion`, phản ánh trạng thái và thông tin gốc cần khách xác nhận khi đổi chuyến. Request mới có thể gửi `expectedSourceVersion` để từ chối thông tin gốc đã cũ bằng `409 BOOKING_CHANGED` trước khi chuyển ghế; lịch sử đổi cũng tham gia phiên bản để trường hợp đổi A → B → A vẫn khác bản gốc. `expectedBookingVersion` kiểm tra riêng điều kiện chuyến đích như ở luồng giữ/đặt vé. Các trường phiên bản thiếu vẫn tương thích client cũ; replay đúng body/key của yêu cầu đã lưu lấy kết quả hiện tại trước khi kiểm tra phiên bản/giữ chỗ cũ.
+
+`expectedSourceVersion` phải là chuỗi đúng 64 ký tự hexadecimal thường (`a`–`f`, `0`–`9`); giá trị null, sai kiểu hoặc sai định dạng trả `400 VALIDATION_ERROR`.
+
+Giao diện lưu yêu cầu đổi chuyến chưa rõ kết quả trong sessionStorage, phục hồi đúng thông tin đón/trả sau reload và yêu cầu khách xác nhận lại để lấy kết quả. Nếu vé gốc hoặc chuyến đích đổi trước khi yêu cầu hoàn tất, phải xem lại thông tin và đồng ý mới. Bản nháp chuyến đích được gắn với đúng mã vé gốc; đăng xuất/đổi tài khoản xóa dữ liệu khôi phục này.
+
 - `GET /bookings/lookup?code=…&phone=…`: cần đúng cả mã và số điện thoại.
 - `GET /bookings`: lịch sử thuộc tài khoản đang đăng nhập.
 - `POST /bookings/:code/cancel`: `phone` cho khách vãng lai; hoặc phiên tài khoản sở hữu vé.

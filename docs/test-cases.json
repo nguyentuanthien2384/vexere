@@ -230,9 +230,9 @@
       "id": "TC-POSTGRES-01", "feature": "PostgreSQL thực và khóa kho vé", "priority": "P0",
       "preconditions": "TEST_DATABASE_URL trỏ database riêng tên có test; runner tạo schema ngẫu nhiên cho từng file.",
       "input": "Commit/rollback, 8 unique/seat contenders, reservation/hold/coupon/receipt và session.",
-      "steps": ["Chạy npm run test:postgres qua sáu bộ đã opt in, gồm search-contracts và hold-recovery.", "Kiểm tra reports từng file và schema từng ca search/hold-recovery đã dọn."],
+      "steps": ["Chạy npm run test:postgres qua bảy bộ đã opt in, gồm search-contracts, hold-recovery và reschedule-recovery.", "Kiểm tra reports từng file và schema từng ca search/hold-recovery/reschedule-recovery đã dọn."],
       "expected": "Không bán/thu/tiêu quota trùng; rollback và pool còn dùng được; session đúng; schema test bị xóa sau mỗi bộ, không dùng public schema.",
-      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "tests/search-contracts.test.js", "ids": ["IT-SEARCH-"]}, {"file": "tests/hold-recovery.test.js", "ids": ["IT-HOLD-REC-"]}, {"file": "tests/postgres/database.test.js", "ids": ["IT-PG-"]}]
+      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "tests/search-contracts.test.js", "ids": ["IT-SEARCH-"]}, {"file": "tests/hold-recovery.test.js", "ids": ["IT-HOLD-REC-"]}, {"file": "tests/reschedule-recovery.test.js"}, {"file": "tests/postgres/database.test.js", "ids": ["IT-PG-"]}]
     },
     {
       "id": "TC-WEB-01", "feature": "Ranh giới web, production và dữ liệu mẫu", "priority": "P0",
@@ -246,9 +246,9 @@
       "id": "TC-UI-01", "feature": "Điều hướng khách, responsive và phản hồi trễ", "priority": "P1",
       "preconditions": "Chrome headless với kho test riêng, viewport desktop/mobile.",
       "input": "Storage sai cấu trúc, đổi route/date/coupon, keyboard Escape, menu/filter mobile.",
-      "steps": ["Chạy toàn bộ tám browser suites.", "Kiểm tra search/checkout/lookup/admin, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
+      "steps": ["Chạy toàn bộ chín browser suites.", "Kiểm tra search/checkout/lookup/reschedule/admin, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
       "expected": "Luồng chính chạy được, không blank screen/overflow; phản hồi trễ không đổi trạng thái mới; keyboard/modal hoạt động; screenshots lưu để xem thủ công, không phải visual baseline tự động.",
-      "automation": [{"file": "scripts/browser-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-admin-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-integrations-smoke.js"}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-"]}, {"file": "scripts/browser-checkout-smoke.js", "ids": ["UI-CHECK-"]}]
+      "automation": [{"file": "scripts/browser-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-admin-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-integrations-smoke.js"}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-"]}, {"file": "scripts/browser-checkout-smoke.js", "ids": ["UI-CHECK-"]}, {"file": "scripts/browser-reschedule-smoke.js", "ids": ["UI-RSCH-"]}]
     },
     {
       "id": "TC-HOLD-02", "feature": "Giữ ghế theo điều kiện đã xem và khôi phục sau mất phản hồi", "priority": "P0",
@@ -273,6 +273,22 @@
       "steps": ["Điền thông tin khách, làm hold hết hạn ở server rồi kiểm tra và giữ lại.", "Cho một chiều khứ hồi lỗi trong khi chiều kia còn hạn; kiểm tra giữ chỗ còn hạn không bị nhả.", "Cho giữ lại lần hai lỗi hoặc phản hồi đến sau điều hướng; kiểm tra cleanup giữ mới và bản nháp đang xem.", "Giữ phản hồi cập nhật chuyến A rồi mở chuyến B và cập nhật B; tải lại và sửa ghế sau khi nhập thông tin khách.", "Đăng xuất/đổi tài khoản khi checkout mất phản hồi hoặc phản hồi chậm; kiểm tra tài khoản mới không nhận thông tin khách hay kết quả cũ."],
       "expected": "Giữ lại chỉ xử lý lượt hết hạn, không mất lượt còn hạn; lỗi/stale cleanup đúng giữ mới; giá/điểm đón được cập nhật và ưu đãi/đồng ý cũ bị vô hiệu khi điều kiện đổi; dữ liệu hành khách được giữ trong cùng hành trình và xóa khi đổi danh tính; phản hồi cũ không ghi đè hoặc chặn cập nhật chuyến mới; retry checkout chưa rõ kết quả cùng danh tính vẫn giữ đúng body/key.",
       "automation": [{"file": "scripts/browser-checkout-smoke.js", "ids": ["UI-CHECK-"]}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}]
+    },
+    {
+      "id": "TC-RESCHEDULE-01", "feature": "Đổi chuyến có phiên bản gốc và chống thực hiện lặp", "priority": "P0",
+      "preconditions": "Vé managed còn điều kiện đổi; chuyến đích cùng tuyến/nhà xe/giá, có giữ ghế hoặc ghế trống; fixture riêng cho mỗi ca.",
+      "input": "Idempotency-Key đúng/sai/đã dùng, expectedSourceVersion đúng/cũ/malformed, expectedBookingVersion chuyến đích, yêu cầu đồng thời và giữ chỗ đã tiêu thụ.",
+      "steps": ["Gửi đồng thời cùng body/key, thử lại sau commit/restart và kiểm tra ghế/lịch sử/audit.", "Thay body/path/mã vé hoặc làm lỗi trước commit rồi kiểm tra khóa.", "Đổi/hủy vé sau lần thành công, thử replay; kiểm tra trạng thái hiện tại không bị đặt lại.", "Gửi hai xác nhận từ cùng phiên bản vé gốc, gồm trường hợp đổi A sang B rồi về A.", "Kiểm tra lại quyền sở hữu và phạm vi nhân viên khi replay hoặc khi giao dịch phải chờ."],
+      "expected": "Cùng yêu cầu chỉ chuyển ghế và ghi lịch sử/audit một lần; replay trả vé hiện tại dù giữ chỗ cũ đã mất; dữ liệu khác dưới khóa cũ bị từ chối; lỗi rollback không tiêu thụ khóa. Vé gốc đổi trả BOOKING_CHANGED trước khi tác động kho. Giữ giá/ưu đãi/chứng từ và đơn khứ hồi nhất quán; quyền hiện tại vẫn bắt buộc.",
+      "automation": [{"file": "tests/unit/reschedule-state.test.js", "ids": ["UT-RESCHED-"]}, {"file": "tests/reschedule-recovery.test.js", "ids": ["IT-RESCHED-"]}, {"file": "tests/advanced.test.js"}]
+    },
+    {
+      "id": "TC-RESCHEDULE-02", "feature": "Khôi phục giao diện đổi chuyến và riêng tư theo tài khoản", "priority": "P0",
+      "preconditions": "Chrome headless, kho managed tạm, vé gốc và bản nháp chuyến đích có mã vé liên kết; network gates điều khiển phản hồi.",
+      "input": "Mất phản hồi sau commit, reload, chỉnh điểm của yêu cầu chưa rõ kết quả, cache sai cấu trúc, double submit, giữ chỗ hết hạn, vé gốc/chuyến đích đổi, điều hướng mới, đổi tài khoản hoặc tab khác đổi phiên.",
+      "steps": ["Bỏ phản hồi đổi đã commit rồi reload; kiểm tra thông tin đón/trả và thử lại cùng body/path/key; chỉnh điểm phải khôi phục lại và đồng ý trước khi gửi.", "Thay vé gốc hoặc điều kiện chuyến đích trước xác nhận; kiểm tra thông báo, trạng thái vé/thanh toán và đồng ý mới.", "Thử dùng bản nháp của vé A để xác nhận vé B, gửi hai lần và để phản hồi cũ đến sau điều hướng; tải lại cache khôi phục có body thiếu, trip null hoặc ghế không khớp.", "Đăng xuất/đổi tài khoản khi còn yêu cầu chưa rõ kết quả; kiểm tra dữ liệu khôi phục và bản nháp mới."],
+      "expected": "Khôi phục đúng yêu cầu, không nhân đôi lịch sử; không gửi mới bằng giữ chỗ hết hạn; thông tin đổi yêu cầu xem trạng thái hiện tại và đồng ý lại. Cache sai bị bỏ an toàn, không gửi request sai hoặc làm mất giữ chỗ; bản nháp chỉ dùng cho đúng mã vé. Phản hồi cũ không điều hướng/ghi đè bản nháp hoặc tài khoản mới. Logout/đổi tài khoản xóa thông tin vé gốc và yêu cầu khôi phục.",
+      "automation": [{"file": "scripts/browser-reschedule-smoke.js", "ids": ["UI-RSCH-"]}, {"file": "scripts/browser-advanced-smoke.js"}]
     },
     {
       "id": "TC-TOOLING-01", "feature": "Test runner, báo cáo và teardown", "priority": "P1",

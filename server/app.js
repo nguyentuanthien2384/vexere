@@ -16,6 +16,7 @@ const {fetchOperatorFeed}=require('./operator-feed');
 const {createWalletPayments}=require('./wallet-payments');
 const {times,parseSearchQuery,literalSearchPattern,normalizedTextSql,tripTextSql,ratingSql,availableSeatsQuery}=require('./search');
 const {bookingTermsVersion}=require('./booking-terms');
+const {rescheduleVersion}=require('./reschedule-state');
 
 class ApiError extends Error { constructor(status,message,code='VALIDATION_ERROR') { super(message); this.status = status; this.code = code; } }
 function fail(status,message,code) { throw new ApiError(status,message,code); }
@@ -132,9 +133,10 @@ async function createApi(options={}) {
     if (!row) return null;
     const snapshot=parse(row.data);
     const trip=snapshot.trip || await getTrip(row.trip_id,tx);
-    return {...snapshot,code:row.code,tripId:row.trip_id,userId:row.user_id,status:row.status,paymentStatus:row.payment_status,
+    const booking={...snapshot,code:row.code,tripId:row.trip_id,userId:row.user_id,status:row.status,paymentStatus:row.payment_status,
       paymentMethod:row.payment_method,total:row.total,createdAt:row.created_at,expiresAt:row.expires_at,orderCode:row.order_code || snapshot.orderCode || null,
       couponCode:row.promo_code || snapshot.couponCode || null,source:snapshot.source || trip?.source || 'managed',trip};
+    return {...booking,rescheduleVersion:rescheduleVersion(booking)};
   }
   function bookingOwner(req,booking) {
     return (req.user && booking.userId === req.user.id) || (validPhone(phone(req.query.phone || req.body?.phone)) && phone(req.query.phone || req.body?.phone) === booking.phone);
