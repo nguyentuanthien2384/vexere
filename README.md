@@ -30,9 +30,11 @@ Không cần sửa file `.env` cũ để xem bản kiểm thử. Nếu muốn c�
 ### Khách hàng
 
 - Tìm chuyến theo tuyến/ngày; đảo chiều; lọc nhà xe, loại xe, giá và khung giờ; sắp xếp và phân trang.
+- Tìm nhanh địa điểm có dấu/không dấu, tên quen gọi như Sài Gòn; lưu sáu địa điểm chọn gần đây trên trình duyệt. Hộp chọn hỗ trợ bàn phím và Escape.
+- Bộ icon SVG cục bộ dùng chung cho trang khách và quản trị: xe, địa điểm, lịch, ghế/giường/cabin, tiện ích, ưu đãi, thanh toán và các thao tác quản lý.
 - Xem hành trình, giờ đến qua ngày tiếp theo, tiện ích, chính sách, điểm đón/trả và hồ sơ nhà xe.
 - Chọn nhiều ghế trên sơ đồ theo tầng; giá theo ghế nếu nhà xe cấu hình.
-- Giữ ghế 5 phút trước khi hoàn thành thông tin; bộ đếm và kiểm tra tồn ghế ở máy chủ. Hết hạn cần chọn lại, không đặt tiếp bằng ghế cũ.
+- Giữ ghế tối đa 5 phút trước khi hoàn thành thông tin; bộ đếm và kiểm tra tồn ghế ở máy chủ. Tìm kiếm, giữ ghế, báo giá và đặt vé cùng đóng bán trước khởi hành 30 phút; thời hạn giữ không vượt mốc đóng bán. Hết hạn cần chọn lại, không đặt tiếp bằng ghế cũ.
 - Đặt vé khứ hồi bằng một lần gửi; hai lượt được lưu trong cùng giao dịch. Nếu một lượt không còn ghế, cả đơn không được tạo. Khứ hồi hiện hỗ trợ thanh toán tại nhà xe.
 - Mã giảm giá cố định/phần trăm, mức đơn tối thiểu, trần giảm, thời hạn, hạn mức tổng/theo số điện thoại, điều kiện tuyến/nhà xe/khứ hồi.
 - So sánh tối đa ba chuyến và lưu chuyến yêu thích trên trình duyệt.
@@ -89,6 +91,7 @@ npm test
 npm audit
 npm run test:ui
 npm run test:ui:advanced
+npm run test:ui:regression
 npm run pack:project
 ```
 

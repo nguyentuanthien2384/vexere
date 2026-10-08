@@ -2,6 +2,7 @@
 
 const crypto=require('node:crypto');
 const {makeSeats}=require('./catalog');
+const BOOKING_LEAD_MINUTES=30;
 
 function createBookingFeatures(ctx) {
   const {db,env,fail,endpoint,clean,phone,validPhone,validEmail,getTrip,getBooking,bookingOwner,audit,expire,refreshExpired,requireUser,requireAdmin,scope}=ctx;
@@ -21,6 +22,10 @@ function createBookingFeatures(ctx) {
   function validateSeats(seats) {
     if (!Array.isArray(seats) || seats.length<1 || seats.length>6 || seats.some(s => typeof s !== 'string') || new Set(seats).size !== seats.length) fail(400,'Vui lòng chọn từ 1 đến 6 ghế khác nhau.');
   }
+  function validateLeg(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input) || !clean(input.tripId)) fail(400,'Thông tin chuyến xe không hợp lệ.');
+    validateSeats(input.seats);
+  }
   async function lockTrips(tx,ids) {
     const rows=new Map();
     for (const id of [...new Set(ids)].sort()) {
@@ -36,8 +41,8 @@ function createBookingFeatures(ctx) {
   async function clearHold(tx,holdHash) {
     await tx.run('DELETE FROM hold_seats WHERE hold_hash=?',[holdHash]); await tx.run('DELETE FROM seat_holds WHERE hash=?',[holdHash]);
   }
-  async function legInfo(tx,input,{requirePoints=true,minLeadMinutes=30,skipBookingCode=null}={}) {
-    validateSeats(input.seats);
+  async function legInfo(tx,input,{requirePoints=true,minLeadMinutes=BOOKING_LEAD_MINUTES,skipBookingCode=null}={}) {
+    validateLeg(input);
     const trip=await getTrip(clean(input.tripId),tx,{activeOnly:true});
     if (!trip || (env.NODE_ENV === 'production' && trip.source === 'demo')) fail(404,'Chuyến xe không còn mở bán.','NOT_FOUND');
     const departureAt=Date.parse(trip.date+'T'+trip.departureTime+':00+07:00');
@@ -116,6 +121,7 @@ function createBookingFeatures(ctx) {
     if (asOrder && input.paymentMethod !== 'cash') fail(400,'Đơn khứ hồi hiện hỗ trợ thanh toán tại nhà xe. Vui lòng chọn tiền mặt.','PAYMENT_UNSUPPORTED');
     if (input.paymentMethod === 'vnpay' && !ctx.payments.configured(env)) fail(503,'VNPAY chưa được cấu hình. Vui lòng chọn thanh toán tại nhà xe.','PAYMENT_UNAVAILABLE');
     if (!Array.isArray(inputs) || inputs.length !== (asOrder ? 2 : 1)) fail(400,'Số chuyến không hợp lệ.');
+    inputs.forEach(validateLeg);
     const orderCode=asOrder ? newCode('T4O') : null,bookingCodes=inputs.map(() => newCode('T4T'));
     const result=await db.transaction(async tx => {
       await lockTrips(tx,inputs.map(leg => clean(leg.tripId)));
@@ -152,7 +158,7 @@ function createBookingFeatures(ctx) {
   }
   function installPublic(router) {
     router.post('/holds',endpoint(async (req,res) => {
-      const input=req.body; validateSeats(input.seats); const tripId=clean(input.tripId),ownerKey=owner(req),token=crypto.randomBytes(32).toString('hex'),holdHash=hash(token),expiresAt=new Date(Date.now()+5*60000).toISOString();
+      const input=req.body; validateLeg(input); const tripId=clean(input.tripId),ownerKey=owner(req),token=crypto.randomBytes(32).toString('hex'),holdHash=hash(token);
       const hold=await db.transaction(async tx => {
         if (db.dialect === 'postgres') await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',[ownerKey]);
         await lockTrips(tx,[tripId]); await expire(tx,tripId);
@@ -162,7 +168,8 @@ function createBookingFeatures(ctx) {
         // Replacing a user's previous hold on the same trip is atomic, without extending any other user's hold.
         const old=await tx.all('SELECT hash FROM seat_holds WHERE trip_id=? AND (owner_key=? OR owner_key=?)',[tripId,ownerKey,guestKey]);
         for (const row of old) await clearHold(tx,row.hash);
-        await legInfo(tx,input,{requirePoints:false});
+        const leg=await legInfo(tx,input,{requirePoints:false});
+        const expiresAt=new Date(Math.min(Date.now()+5*60000,leg.departureAt-BOOKING_LEAD_MINUTES*60000)).toISOString();
         await tx.run('INSERT INTO seat_holds(hash,trip_id,owner_key,expires_at,data) VALUES(?,?,?,?,?)',[holdHash,tripId,ownerKey,expiresAt,JSON.stringify({seats:input.seats})]);
         for (const seat of input.seats) await tx.run('INSERT INTO hold_seats(trip_id,seat,hold_hash) VALUES(?,?,?)',[tripId,seat,holdHash]);
         return {token,tripId,seats:input.seats,expiresAt};
@@ -192,10 +199,17 @@ function createBookingFeatures(ctx) {
     }));
     router.post('/promotions/quote',endpoint(async (req,res) => {
       if (!Array.isArray(req.body.legs) || ![1,2].includes(req.body.legs.length)) fail(400,'Cần một chuyến hoặc hai chuyến khứ hồi.');
-      await refreshExpired(); const legs=[];
-      for (const input of req.body.legs) { validateSeats(input.seats);const trip=await getTrip(clean(input.tripId),db,{activeOnly:true});if (!trip || (env.NODE_ENV === 'production' && trip.source === 'demo')) fail(404,'Không tìm thấy chuyến.','NOT_FOUND'); const labels=makeSeats(trip.type,trip.totalSeats).map(s=>s.label);if(input.seats.some(s=>!labels.includes(s))) fail(400,'Ghế không hợp lệ.');legs.push({trip,seats:input.seats,subtotal:input.seats.reduce((sum,s)=>sum+(trip.seatPrices?.[s] ?? trip.price),0),departureAt:Date.parse(trip.date+'T'+trip.departureTime+':00+07:00')}); }
-      if (legs.length === 2) roundTrip(legs);
-      res.json(await quote(db,legs,req.body.couponCode,phone(req.body.phone)));
+      req.body.legs.forEach(validateLeg);
+      const prices=await db.transaction(async tx => {
+        const tripIds=req.body.legs.map(input=>clean(input.tripId));
+        await lockTrips(tx,tripIds);
+        for (const tripId of [...new Set(tripIds)].sort()) await expire(tx,tripId);
+        const legs=[];
+        for (const input of req.body.legs) legs.push(await legInfo(tx,input,{requirePoints:false}));
+        if (legs.length === 2) roundTrip(legs);
+        return quote(tx,legs,req.body.couponCode,phone(req.body.phone));
+      });
+      res.json(prices);
     }));
     router.post('/bookings/:code/reschedule',endpoint(async (req,res) => res.json({booking:await reschedule(req,false)})));
   }
@@ -246,4 +260,4 @@ function createBookingFeatures(ctx) {
   return {installPublic,installAdmin,checkout,notify,expireHolds,releasePromotion,ownerRead,ownsHold};
 }
 
-module.exports={createBookingFeatures};
+module.exports={createBookingFeatures,BOOKING_LEAD_MINUTES};

@@ -87,5 +87,5 @@ const {addDays}=require('../server/catalog');
     assert.deepEqual(failures,[],'No browser errors, blocked scripts, or missing assets');
     console.log('Advanced UI passed: round-trip holds, draft refresh, valid/expired quota coupons, atomic order, guest reschedule, partial cancellation, saved/compared trips, admin promotions/manifest and mobile layouts.');
   } catch(error) {console.error(error);process.exitCode=1;}
-  finally {await browser.close();await new Promise(r=>server.close(r));await runtime.close();await fs.rm(dataDir,{recursive:true,force:true});}
+  finally {await browser.close();await new Promise(r=>server.close(r));await runtime.close();const cleanupTarget=path.resolve(dataDir),tempRoot=path.resolve(os.tmpdir())+path.sep;if(!cleanupTarget.startsWith(tempRoot)||!path.basename(cleanupTarget).startsWith('ticket4t-browser-v3-'))throw new Error('Invalid temporary cleanup path.');await fs.rm(cleanupTarget,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exitCode=1;});

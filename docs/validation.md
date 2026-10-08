@@ -1,5 +1,18 @@
 # Kết quả kiểm tra bản 3 — 07/10/2026
 
+## Cập nhật logic và icon — 08/10/2026
+
+- `npm run check`: 38 file JavaScript hợp lệ cú pháp.
+- `npm test`: 43/43 đạt trên SQLite và ranh giới ứng dụng web; thêm kiểm thử dữ liệu đầu vào sai, ghế/giữ chỗ khi báo giá ưu đãi, đóng bán và thời hạn giữ gần giờ khởi hành.
+- `npm run test:ui` và `npm run test:ui:advanced`: đạt sau tích hợp bộ icon SVG và sửa logic đặt vé.
+- `npm run test:ui:regression`: kiểm tra tìm/lọc/sắp xếp, đảo tuyến, tìm địa điểm có/không dấu và tên quen gọi, giới hạn sáu ghế, ghế bị người khác giữ, sửa ngày về và chọn lại ghế khứ hồi, phản hồi mã ưu đãi đến chậm, storage sai cấu trúc, chặn chuyến đóng bán, SVG, menu/bộ lọc mobile và tra cứu mã bằng số điện thoại.
+- Giao diện dùng 65 icon SVG cục bộ thống nhất giữa trang khách và quản trị; hỗ trợ trình đọc màn hình qua nhãn thao tác và ẩn icon trang trí.
+- Đã xem ảnh trang chủ và hộp chọn địa điểm desktop/mobile; hộp tìm kiếm hiển thị đúng, không tràn ngang hoặc cắt nội dung.
+
+Đợt này dùng database tạm riêng, không thay đổi kho vé đang chạy. Chưa kiểm tra lại PostgreSQL, Docker, SMTP hay merchant VNPAY trong đợt này. Đối chiếu giao diện công khai tại https://vexere.com/ là tham chiếu cho trải nghiệm vé xe và icon; chưa thể chứng nhận tương đương toàn bộ dịch vụ Vexere. Dự án chưa có đặt vé máy bay, tàu hỏa, thuê xe, theo dõi xe trực tiếp hoặc kết nối kho vé nhà xe thật. Khứ hồi hiện thanh toán tại nhà xe và hoàn tiền vẫn cần đối soát/biên nhận của nhân viên.
+
+## Kết quả đợt trước
+
 Môi trường kiểm tra: Windows, Node.js 24.21.0, Chrome headless, SQLite tích hợp Node và PostgreSQL 18.4 trong cluster kiểm thử riêng.
 
 - `npm run check`: 36 file JavaScript hợp lệ cú pháp.

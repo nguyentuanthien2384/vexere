@@ -1,0 +1,8 @@
+.ticket-icon{display:inline-block;width:20px;height:20px;flex-shrink:0;vertical-align:middle;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;overflow:visible;pointer-events:none}
+[data-icon]{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;line-height:1}
+.icon-badge{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:12px;background:#edf4ec;color:#164b3f;flex-shrink:0}
+.icon-badge .ticket-icon{width:24px;height:24px}
+.icon-badge-warm{background:#fff3d8;color:#9b761c}
+.icon-badge-blue{background:#eaf2fd;color:#3174bc}
+.icon-badge-neutral{background:#f1f3f0;color:#708173}
+@media(forced-colors:active){.ticket-icon{stroke:currentColor}.icon-badge{border:1px solid currentColor}}

@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS promotion_uses (id TEXT PRIMARY KEY, code TEXT NOT NU
 CREATE INDEX IF NOT EXISTS promotion_uses_customer_idx ON promotion_uses(code,phone,status);
 CREATE TABLE IF NOT EXISTS payments (reference TEXT PRIMARY KEY, booking_code TEXT NOT NULL REFERENCES bookings(code), provider TEXT NOT NULL, amount INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS booking_events (id TEXT PRIMARY KEY, booking_code TEXT NOT NULL REFERENCES bookings(code), actor TEXT NOT NULL, event TEXT NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS admin_audit_events (id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, actor_name TEXT NOT NULL, actor_role TEXT NOT NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, operator_id TEXT, created_at TEXT NOT NULL, data TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS admin_audit_created_idx ON admin_audit_events(created_at,id);
+CREATE INDEX IF NOT EXISTS admin_audit_operator_idx ON admin_audit_events(operator_id,created_at);
 CREATE TABLE IF NOT EXISTS auth_tokens (hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), purpose TEXT NOT NULL, expires_at TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS reviews (id TEXT PRIMARY KEY, booking_code TEXT UNIQUE NOT NULL REFERENCES bookings(code), operator_id TEXT NOT NULL REFERENCES operators(id), user_id TEXT NOT NULL REFERENCES users(id), rating INTEGER NOT NULL, title TEXT NOT NULL, comment TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS email_outbox (id TEXT PRIMARY KEY, recipient TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending');

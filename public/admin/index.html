@@ -5,7 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#123f3d">
   <title>Vận hành · Ticket4T</title>
+  <link rel="icon" href="/app/logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/app/icons.css">
+  <script src="/app/icons.js" defer></script>
   <script src="/admin/admin.js" defer></script>
 </head>
 <body>
@@ -18,9 +21,9 @@
     <div class="login-area"><form id="login-form" class="login-card">
       <span class="eyebrow">CHÀO MỪNG TRỞ LẠI</span><h2>Đăng nhập vận hành</h2><p>Dành cho quản trị viên và đối tác nhà xe.</p>
       <label>Email<input type="email" name="email" autocomplete="username" required placeholder="ten@nhaxe.vn"></label>
-      <label>Mật khẩu<div class="password-field"><input type="password" name="password" autocomplete="current-password" required minlength="8"><button id="toggle-password" type="button" aria-label="Hiện mật khẩu">Hiện</button></div></label>
-      <p id="login-error" class="error-text" role="alert"></p><button class="button primary full" type="submit">Đăng nhập <span aria-hidden="true">→</span></button>
-      <p class="login-note">Dùng tài khoản do quản trị hệ thống cấp. Quyền truy cập được giới hạn theo nhà xe.</p><a class="back-link" href="/">← Về trang đặt vé</a>
+      <label>Mật khẩu<div class="password-field"><input type="password" name="password" autocomplete="current-password" required minlength="8"><button id="toggle-password" type="button" aria-label="Hiện mật khẩu" aria-pressed="false"><span data-icon="eye" data-icon-size="16"></span><span>Hiện</span></button></div></label>
+      <p id="login-error" class="error-text" role="alert"></p><button class="button primary full" type="submit">Đăng nhập <span data-icon="arrow"></span></button>
+      <p class="login-note"><span data-icon="shield"></span>Dùng tài khoản do quản trị hệ thống cấp. Quyền truy cập được giới hạn theo nhà xe.</p><a class="back-link" href="/"><span data-icon="arrow-left"></span>Về trang đặt vé</a>
     </form></div>
   </section>
   <div id="portal" class="portal" hidden>
@@ -28,25 +31,25 @@
       <a class="brand" href="/">Ticket<span>4T</span><small>CỔNG VẬN HÀNH</small></a>
       <span class="nav-label">KHÔNG GIAN LÀM VIỆC</span>
       <nav aria-label="Điều hướng quản trị">
-        <button data-page="dashboard" class="nav-button active"><span class="nav-icon">◫</span>Tổng quan</button>
-        <button data-page="trips" class="nav-button"><span class="nav-icon">⇄</span>Chuyến xe</button>
-        <button data-page="bookings" class="nav-button"><span class="nav-icon">▤</span>Đơn đặt vé</button>
-        <button data-page="promotions" class="nav-button"><span class="nav-icon">%</span>Khuyến mãi</button>
-        <button data-page="operators" class="nav-button"><span class="nav-icon">▥</span>Nhà xe</button>
-        <button data-page="users" class="nav-button"><span class="nav-icon">♙</span>Tài khoản</button>
-        <button data-page="import" class="nav-button"><span class="nav-icon">↥</span>Nhập lịch trình</button>
+        <button data-page="dashboard" class="nav-button active"><span class="nav-icon" data-icon="dashboard"></span>Tổng quan</button>
+        <button data-page="trips" class="nav-button"><span class="nav-icon" data-icon="bus"></span>Chuyến xe</button>
+        <button data-page="bookings" class="nav-button"><span class="nav-icon" data-icon="ticket"></span>Đơn đặt vé</button>
+        <button data-page="promotions" class="nav-button"><span class="nav-icon" data-icon="tag"></span>Khuyến mãi</button>
+        <button data-page="operators" class="nav-button"><span class="nav-icon" data-icon="building"></span>Nhà xe</button>
+        <button data-page="users" class="nav-button"><span class="nav-icon" data-icon="users"></span>Tài khoản</button>
+        <button data-page="import" class="nav-button"><span class="nav-icon" data-icon="upload"></span>Nhập lịch trình</button>
       </nav>
-      <div class="sidebar-bottom"><div class="workspace-badge"><span class="status-dot"></span> Phân quyền theo tài khoản</div><a href="/" class="public-link">Mở trang bán vé <span>↗</span></a><button id="logout-button" class="logout-button">Đăng xuất</button></div>
+      <div class="sidebar-bottom"><div class="workspace-badge"><span data-icon="shield" data-icon-size="14"></span>Phân quyền theo tài khoản</div><a href="/" class="public-link">Mở trang bán vé <span data-icon="arrow-up-right" data-icon-size="16"></span></a><button id="logout-button" class="logout-button"><span data-icon="logout" data-icon-size="16"></span>Đăng xuất</button></div>
     </aside>
     <div class="main-wrap">
-      <header class="topbar"><button class="menu-button" id="menu-button" aria-label="Mở điều hướng" aria-expanded="false">☰</button><div class="breadcrumb">Không gian vận hành <span>/</span> <strong id="breadcrumb-page">Tổng quan</strong></div><div class="profile"><span class="avatar" id="avatar">QT</span><div><strong id="profile-name">Quản trị viên</strong><small id="profile-role">Quản trị hệ thống</small></div></div></header>
+      <header class="topbar"><button class="menu-button" id="menu-button" aria-label="Mở điều hướng" aria-expanded="false" aria-controls="sidebar"><span data-icon="menu"></span></button><div class="breadcrumb">Không gian vận hành <span>/</span> <strong id="breadcrumb-page">Tổng quan</strong></div><div class="profile"><span class="avatar" id="avatar">QT</span><div><strong id="profile-name">Quản trị viên</strong><small id="profile-role">Quản trị hệ thống</small></div></div></header>
       <main id="main" tabindex="-1"><div class="page-heading"><div><span class="eyebrow" id="page-kicker">BỨC TRANH VẬN HÀNH</span><h1 id="page-title">Tổng quan</h1><p id="page-description">Theo dõi lịch trình và đơn vé của bạn.</p></div><div id="page-actions"></div></div><div id="content" aria-live="polite"></div></main>
       <footer class="portal-footer">Ticket4T · Hệ thống điều hành vé xe <span id="portal-date"></span></footer>
     </div>
   </div>
-  <dialog id="editor-dialog" class="editor-dialog"><form id="editor-form"><div class="dialog-heading"><div><span class="eyebrow" id="editor-kicker">THÔNG TIN</span><h2 id="editor-title">Chỉnh sửa</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Đóng">×</button></div><div id="editor-fields" class="form-grid"></div><p id="editor-error" class="error-text" role="alert"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close-dialog>Hủy</button><button class="button primary" type="submit">Lưu thông tin</button></div></form></dialog>
-  <dialog id="confirm-dialog" class="confirm-dialog"><div class="dialog-heading"><h2 id="confirm-title">Xác nhận</h2><button class="icon-button" type="button" data-close-confirm aria-label="Đóng">×</button></div><p id="confirm-message"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close-confirm>Quay lại</button><button id="confirm-submit" class="button danger" type="button">Xác nhận</button></div></dialog>
-  <dialog id="manifest-dialog" class="manifest-dialog"><div class="dialog-heading"><div><span class="eyebrow">DANH SÁCH LÊN XE</span><h2 id="manifest-title">Danh sách chuyến xe</h2></div><button class="icon-button" type="button" data-close-manifest aria-label="Đóng danh sách">×</button></div><div id="manifest-content"></div><div class="dialog-footer"><button class="button secondary" type="button" data-close-manifest>Đóng</button><button class="button primary" type="button" data-action="print-manifest">In danh sách</button></div></dialog>
+  <dialog id="editor-dialog" class="editor-dialog"><form id="editor-form"><div class="dialog-heading"><div><span class="eyebrow" id="editor-kicker">THÔNG TIN</span><h2 id="editor-title">Chỉnh sửa</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Đóng"><span data-icon="close" data-icon-size="18"></span></button></div><div id="editor-fields" class="form-grid"></div><p id="editor-error" class="error-text" role="alert"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close-dialog>Hủy</button><button class="button primary" type="submit">Lưu thông tin</button></div></form></dialog>
+  <dialog id="confirm-dialog" class="confirm-dialog"><div class="dialog-heading"><h2 id="confirm-title">Xác nhận</h2><button class="icon-button" type="button" data-close-confirm aria-label="Đóng"><span data-icon="close" data-icon-size="18"></span></button></div><p id="confirm-message"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close-confirm>Quay lại</button><button id="confirm-submit" class="button danger" type="button">Xác nhận</button></div></dialog>
+  <dialog id="manifest-dialog" class="manifest-dialog"><div class="dialog-heading"><div><span class="eyebrow">DANH SÁCH LÊN XE</span><h2 id="manifest-title">Danh sách chuyến xe</h2></div><button class="icon-button" type="button" data-close-manifest aria-label="Đóng danh sách"><span data-icon="close" data-icon-size="18"></span></button></div><div id="manifest-content"></div><div class="dialog-footer"><button class="button secondary" type="button" data-close-manifest>Đóng</button><button class="button primary" type="button" data-action="print-manifest"><span data-icon="print" data-icon-size="16"></span>In danh sách</button></div></dialog>
   <div class="toast-stack" id="toast-stack" role="status"></div>
 </body>
 </html>

@@ -8,7 +8,7 @@ const {busTypes,routes,todayVietnam,addDays,makeSeats,tripToRow,INSERT_TRIP,init
 const payments = require('./payments');
 const {createMailer} = require('./mailer');
 const {parseCsv} = require('./import');
-const {createBookingFeatures}=require('./booking-features');
+const {createBookingFeatures,BOOKING_LEAD_MINUTES}=require('./booking-features');
 const {initializeDemoFixtures}=require('./demo-fixtures');
 
 class ApiError extends Error { constructor(status,message,code='VALIDATION_ERROR') { super(message); this.status = status; this.code = code; } }
@@ -55,6 +55,15 @@ async function createApi(options={}) {
   const mail = createMailer(db,env,options.dataDir);
   const paymentMethods = [{id:'cash',name:'Thanh toán tại nhà xe',enabled:true},{id:'vnpay',name:'VNPAY',enabled:payments.configured(env)}];
   const lock = db.dialect === 'postgres' ? ' FOR UPDATE' : '';
+  const bookingCutoff = () => new Date(Date.now()+BOOKING_LEAD_MINUTES*60000).toISOString();
+
+  router.use((req,res,next) => {
+    if (!['GET','HEAD','OPTIONS'].includes(req.method)) {
+      req.body ??= {};
+      if (typeof req.body !== 'object' || Array.isArray(req.body)) return next(new ApiError(400,'Dữ liệu yêu cầu phải là một đối tượng hợp lệ.'));
+    }
+    next();
+  });
 
   router.use((req,res,next) => {
     (async () => {
@@ -91,11 +100,13 @@ async function createApi(options={}) {
   function decorate(row) {
     const trip = parse(row.data);
     const op = row.operator_data ? parse(row.operator_data) : null;
+    const bookingCutoffAt=new Date(Date.parse(row.departure_at)-BOOKING_LEAD_MINUTES*60000).toISOString();
     return {...trip,id:row.id,operatorId:row.operator_id,operatorName:op?.name || trip.operatorName,
       rating:op?.rating ?? trip.rating ?? 0,reviewCount:op?.reviewCount ?? 0,
+      bookingCutoffAt,bookingOpen:row.active === 1 && row.operator_active === 1 && Date.parse(bookingCutoffAt)>Date.now(),
       active:row.active === 1,source:row.source,availableSeats:Math.max(0,row.total_seats-Number(row.reserved_count || 0)-Number(row.held_count || 0))};
   }
-  const tripSelect = 'SELECT t.*,o.data AS operator_data,(SELECT COUNT(*) FROM reserved_seats s WHERE s.trip_id=t.id) AS reserved_count,(SELECT COUNT(*) FROM hold_seats hs WHERE hs.trip_id=t.id) AS held_count FROM trips t JOIN operators o ON o.id=t.operator_id';
+  const tripSelect = 'SELECT t.*,o.data AS operator_data,o.active AS operator_active,(SELECT COUNT(*) FROM reserved_seats s WHERE s.trip_id=t.id) AS reserved_count,(SELECT COUNT(*) FROM hold_seats hs WHERE hs.trip_id=t.id) AS held_count FROM trips t JOIN operators o ON o.id=t.operator_id';
   async function getTrip(id,tx=db,{activeOnly=false}={}) {
     const row = await tx.get(tripSelect+' WHERE t.id=?'+(activeOnly ? ' AND t.active=1 AND o.active=1' : ''),[id]);
     return row ? decorate(row) : null;
@@ -117,7 +128,7 @@ async function createApi(options={}) {
     await refreshExpired();
     const {page,limit} = pageArgs(query);
     const clauses = [], args = [];
-    if (!admin) { clauses.push('t.active=1','o.active=1','t.departure_at>?'); args.push(nowISO()); }
+    if (!admin) { clauses.push('t.active=1','o.active=1','t.departure_at>?'); args.push(bookingCutoff()); }
     if (!admin && env.NODE_ENV === 'production') clauses.push("t.source='managed'");
     if (admin && req.user.role === 'operator') { clauses.push('t.operator_id=?'); args.push(req.user.operatorId || ''); }
     for (const [param,column] of [['from','from_id'],['to','to_id'],['date','date'],['operator','operator_id'],['type','type']]) {
@@ -163,8 +174,9 @@ async function createApi(options={}) {
     const locations = await db.all('SELECT * FROM locations ORDER BY name');
     const operatorRows = await db.all('SELECT data FROM operators WHERE active=1 ORDER BY name');
     const productionFilter=env.NODE_ENV === 'production' ? " AND t.source='managed'" : '';
-    const counts = await db.get('SELECT COUNT(*) AS trips,COUNT(DISTINCT t.operator_id) AS operators,SUM(total_seats) AS seats FROM trips t JOIN operators o ON o.id=t.operator_id WHERE t.active=1 AND o.active=1 AND t.departure_at>?'+productionFilter,[nowISO()]);
-    const actualRoutes = await db.all('SELECT t.from_id,t.to_id,MIN(t.price) AS min_price,MIN(t.data) AS data FROM trips t JOIN operators o ON o.id=t.operator_id WHERE t.active=1 AND o.active=1 AND t.departure_at>?'+productionFilter+' GROUP BY t.from_id,t.to_id',[nowISO()]);
+    const cutoff=bookingCutoff();
+    const counts = await db.get('SELECT COUNT(*) AS trips,COUNT(DISTINCT t.operator_id) AS operators,SUM(total_seats) AS seats FROM trips t JOIN operators o ON o.id=t.operator_id WHERE t.active=1 AND o.active=1 AND t.departure_at>?'+productionFilter,[cutoff]);
+    const actualRoutes = await db.all('SELECT t.from_id,t.to_id,MIN(t.price) AS min_price,MIN(t.data) AS data FROM trips t JOIN operators o ON o.id=t.operator_id WHERE t.active=1 AND o.active=1 AND t.departure_at>?'+productionFilter+' GROUP BY t.from_id,t.to_id',[cutoff]);
     const rank={'ho-chi-minh':0,'ha-noi':1,'da-nang':2};
     actualRoutes.sort((a,b) => (rank[a.from_id] ?? 3)-(rank[b.from_id] ?? 3) || a.to_id.localeCompare(b.to_id));
     const popularRoutes = actualRoutes.slice(0,12).map(r => { const t=parse(r.data); return {id:r.from_id+'--'+r.to_id,from:r.from_id,to:r.to_id,fromName:t.fromName,toName:t.toName,image:locations.find(l => l.id === r.to_id)?.image || t.image,minPrice:r.min_price,durationMinutes:t.durationMinutes}; });
@@ -441,7 +453,7 @@ async function createApi(options={}) {
     const date=clean(input.date ?? current.date,10),departureTime=clean(input.departureTime ?? current.departureTime,5);
     if (!validDate(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(departureTime)) fail(400,'Ngày hoặc giờ khởi hành không hợp lệ.');
     if (date < todayVietnam() || date > addDays(todayVietnam(),365)) fail(400,'Ngày mở bán cần trong 365 ngày tới.');
-    if (new Date(date+'T'+departureTime+':00+07:00').getTime()<=Date.now()+30*60000) fail(400,'Giờ khởi hành cần cách hiện tại ít nhất 30 phút.');
+    if (new Date(date+'T'+departureTime+':00+07:00').getTime()<=Date.now()+BOOKING_LEAD_MINUTES*60000) fail(400,'Giờ khởi hành cần cách hiện tại ít nhất '+BOOKING_LEAD_MINUTES+' phút.');
     const type=busTypes.find(t => t.id === (input.type ?? current.type)); if (!type) fail(400,'Loại xe không hợp lệ.');
     const price=Number(input.price ?? current.price),totalSeats=Number(input.totalSeats ?? current.totalSeats ?? type.seats),durationMinutes=Number(input.durationMinutes ?? current.durationMinutes);
     if (!Number.isSafeInteger(price) || price<10000 || price>10000000 || !Number.isInteger(totalSeats) || totalSeats<1 || totalSeats>60 || !Number.isInteger(durationMinutes) || durationMinutes<30 || durationMinutes>2880) fail(400,'Giá vé, số ghế hoặc thời gian hành trình không hợp lệ.');

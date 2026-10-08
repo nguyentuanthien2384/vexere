@@ -205,3 +205,57 @@ test('active holds protect fare and seat layout edits until expiry',async()=>{
   await api.db.transaction(tx=>tx.run('UPDATE seat_holds SET expires_at=? WHERE hash=?',[new Date(Date.now()-1000).toISOString(),holdHash]));
   const edit=await req('/admin/trips/'+item.id,{method:'PATCH',cookie:adminCookie,body:{price:260000}});assert.equal(edit.status,200);assert.equal(edit.data.trip.price,260000);
 });
+
+test('invalid request bodies and roundtrip legs return validation errors without writing inventory',async()=>{
+  const item=await trip(),before=await api.db.get('SELECT (SELECT COUNT(*) FROM bookings) AS bookings,(SELECT COUNT(*) FROM orders) AS orders,(SELECT COUNT(*) FROM hold_seats) AS holds');
+  assert.equal((await req('/bookings',{method:'POST',body:[]})).status,400);
+  for (const invalid of [null,[],{},'invalid']) {
+    const checkout=await req('/orders',{method:'POST',body:{...customer(),legs:[invalid,leg(item)]}});
+    assert.equal(checkout.status,400,JSON.stringify(checkout.data));
+    const quoted=await req('/promotions/quote',{method:'POST',body:{legs:[invalid],phone:'0901234567'}});
+    assert.equal(quoted.status,400,JSON.stringify(quoted.data));
+  }
+  assert.equal((await req('/holds',{method:'POST',body:{seats:['A01']}})).status,400);
+  const after=await api.db.get('SELECT (SELECT COUNT(*) FROM bookings) AS bookings,(SELECT COUNT(*) FROM orders) AS orders,(SELECT COUNT(*) FROM hold_seats) AS holds');
+  assert.deepEqual(after,before);
+});
+
+test('promotion quotes validate live seats and hold tokens with the same rules as checkout',async()=>{
+  const item=await trip({seatPrices:{A02:300000}}),p=await promo();
+  await reserve(item,['A01']);
+  const quote=(seats,extra={})=>req('/promotions/quote',{method:'POST',body:{legs:[leg(item,seats,extra)],couponCode:p.code,phone:'0901234567'}});
+  assert.equal((await quote(['A01'])).data.code,'SEAT_UNAVAILABLE');
+  const held=await req('/holds',{method:'POST',body:{tripId:item.id,seats:['A02']}});
+  assert.equal((await quote(['A02'])).data.code,'SEAT_UNAVAILABLE');
+  assert.equal((await quote(['A03'],{holdToken:held.data.hold.token})).data.code,'HOLD_MISMATCH');
+  const own=await quote(['A02'],{holdToken:held.data.hold.token});
+  assert.equal(own.status,200);assert.equal(own.data.subtotal,300000);assert.equal(own.data.total,270000);
+  assert.equal(Number((await api.db.get('SELECT COUNT(*) AS n FROM seat_holds WHERE trip_id=?',[item.id])).n),1,'Quoting must preserve the hold');
+  const holdHash=crypto.createHash('sha256').update(held.data.hold.token).digest('hex');
+  await api.db.transaction(tx=>tx.run('UPDATE seat_holds SET expires_at=? WHERE hash=?',[new Date(Date.now()-1000).toISOString(),holdHash]));
+  assert.equal((await quote(['A02'],{holdToken:held.data.hold.token})).data.code,'HOLD_EXPIRED');
+  assert.equal((await quote(['A02'])).status,200);
+  assert.equal((await req('/admin/promotions',{cookie:adminCookie})).data.promotions.find(x=>x.code===p.code).usedCount,0);
+});
+
+test('search, catalog counts, seat holds and quotes consistently close sales thirty minutes before departure',async()=>{
+  const item=await trip(),before=(await req('/bootstrap')).data.stats.trips;
+  const departureAt=new Date(Date.now()+20*60000),local=new Date(departureAt.getTime()+7*3600000).toISOString();
+  await api.db.transaction(async tx=>{
+    const row=await tx.get('SELECT data FROM trips WHERE id=?',[item.id]),data={...JSON.parse(row.data),date:local.slice(0,10),departureTime:local.slice(11,16)};
+    await tx.run('UPDATE trips SET date=?,departure_time=?,departure_at=?,data=? WHERE id=?',[data.date,data.departureTime,new Date(data.date+'T'+data.departureTime+':00+07:00').toISOString(),JSON.stringify(data),item.id]);
+  });
+  const detail=await req('/trips/'+item.id);assert.equal(detail.status,200);assert.equal(detail.data.bookingOpen,false);assert.ok(Date.parse(detail.data.bookingCutoffAt)<Date.now());
+  const search=await req('/trips?operator='+operatorId+'&date='+local.slice(0,10)+'&limit=100');assert.ok(search.data.trips.every(t=>t.id!==item.id));
+  assert.equal((await req('/bootstrap')).data.stats.trips,before-1);
+  assert.equal((await req('/holds',{method:'POST',body:{tripId:item.id,seats:['A01']}})).data.code,'DEPARTED');
+  assert.equal((await req('/promotions/quote',{method:'POST',body:{legs:[leg(item)]}})).data.code,'DEPARTED');
+  assert.equal((await reserve(item)).data.code,'DEPARTED');
+});
+
+test('holds expire at the booking cutoff when less than five sale minutes remain',async()=>{
+  const local=new Date(Date.now()+33*60000+7*3600000).toISOString(),item=await trip({date:local.slice(0,10),departureTime:local.slice(11,16)});
+  const held=await req('/holds',{method:'POST',body:{tripId:item.id,seats:['A01']}});
+  assert.equal(held.status,201);assert.equal(held.data.hold.expiresAt,item.bookingCutoffAt);
+  assert.ok(Date.parse(held.data.hold.expiresAt)>Date.now());assert.ok(Date.parse(held.data.hold.expiresAt)<Date.now()+3*60000);
+});
