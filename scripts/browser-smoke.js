@@ -5,16 +5,19 @@ const path = require('node:path');
 const os = require('node:os');
 const { chromium } = require('playwright');
 const { createApp } = require('../index');
+const {cleanupBrowserTest}=require('./browser-test-helpers');
 
 (async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ticket4t-browser-'));
+  let runtime,server,browser,testFailure;
+  try {
   const output = path.resolve('artifacts/screenshots');
   await fs.mkdir(output, { recursive: true });
-  const runtime = await createApp({ env: { NODE_ENV: 'test', SEED_DEMO: 'true', SESSION_SECRET: 'ui-tests-only-'.repeat(5) }, dataDir, seedDays: 2, disableRateLimit: true });
-  const server = runtime.app.listen(0, '127.0.0.1');
+  runtime = await createApp({ env: { NODE_ENV: 'test', SEED_DEMO: 'true', SESSION_SECRET: 'ui-tests-only-'.repeat(5) }, dataDir, seedDays: 2, disableRateLimit: true });
+  server = runtime.app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   const base = 'http://127.0.0.1:' + server.address().port;
-  const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
+  browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
   const failures = [];
   async function instrument(page) {
     page.on('pageerror', error => failures.push(error.message));
@@ -23,7 +26,6 @@ const { createApp } = require('../index');
       if (response.status() === 404 && !response.url().endsWith('/favicon.ico')) failures.push('404: ' + response.url());
     });
   }
-  try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     await instrument(page);
     await page.goto(base);
@@ -176,13 +178,6 @@ const { createApp } = require('../index');
     assert.deepEqual(failures, [], 'No missing app resources, browser crashes or CSP errors.');
     console.log('Browser checks passed: search, seats, checkout, lookup, cancellation, public routes, mobile, admin pages, operator/trip creation, cash receipts and refund receipts.');
     console.log('Screenshots:', output);
-  } finally {
-    await browser.close();
-    await new Promise(resolve => server.close(resolve));
-    await runtime.close();
-    const cleanupTarget = path.resolve(dataDir);
-    const tempRoot = path.resolve(os.tmpdir()) + path.sep;
-    if (!cleanupTarget.startsWith(tempRoot) || !path.basename(cleanupTarget).startsWith('ticket4t-browser-')) throw new Error('Invalid temporary cleanup path.');
-    await fs.rm(cleanupTarget, { recursive: true, force: true });
-  }
+  } catch(error){testFailure=error;throw error;}
+  finally {await cleanupBrowserTest({browser,server,runtime,dataDir,prefix:'ticket4t-browser-'},testFailure);}
 })().catch(error => { console.error(error); process.exitCode = 1; });

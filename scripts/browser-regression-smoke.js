@@ -6,19 +6,22 @@ const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { createApp } = require('../index');
+const {cleanupBrowserTest}=require('./browser-test-helpers');
 const { addDays } = require('../server/catalog');
 
 // Every write is confined to the fixture database in this temporary directory.
 (async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ticket4t-browser-regression-'));
-  const runtime = await createApp({
+  let runtime,server,browser,testFailure;
+  try {
+  runtime = await createApp({
     env: { NODE_ENV: 'development', SEED_DEMO: 'true', SESSION_SECRET: 'regression-tests-only-'.repeat(4) },
     dataDir, seedDays: 6, disableRateLimit: true
   });
-  const server = runtime.app.listen(0, '127.0.0.1');
+  server = runtime.app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   const base = 'http://127.0.0.1:' + server.address().port;
-  const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
+  browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
   const bootstrap = await (await fetch(base + '/api/bootstrap')).json();
   const output = path.resolve('artifacts/screenshots');
   await fs.mkdir(output, { recursive: true });
@@ -68,7 +71,6 @@ const { addDays } = require('../server/catalog');
     }
   }
 
-  try {
     await check('search validation and swapping places', async page => {
       await page.goto(base);
       await page.locator('#search-form').waitFor();
@@ -353,12 +355,6 @@ const { addDays } = require('../server/catalog');
     assert.deepEqual(browserErrors, [], 'No missing assets, browser errors or blocked scripts');
     assert.deepEqual(failures, [], 'All UI regressions pass');
     console.log('Regression UI passed: ' + passed + ' scenarios.');
-  } finally {
-    await browser.close();
-    await new Promise(resolve => server.close(resolve));
-    await runtime.close();
-    const cleanupTarget = path.resolve(dataDir), tempRoot = path.resolve(os.tmpdir()) + path.sep;
-    if (!cleanupTarget.startsWith(tempRoot) || !path.basename(cleanupTarget).startsWith('ticket4t-browser-regression-')) throw new Error('Invalid temporary cleanup path.');
-    await fs.rm(cleanupTarget, { recursive: true, force: true });
-  }
+  } catch(error){testFailure=error;throw error;}
+  finally {await cleanupBrowserTest({browser,server,runtime,dataDir,prefix:'ticket4t-browser-regression-'},testFailure);}
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -249,7 +249,17 @@ function createBookingFeatures(ctx) {
     const p={...current,code,title,description,type,value,source:current.source || 'managed',active:input.active === undefined ? current.active !== false : Boolean(input.active),roundTripOnly:input.roundTripOnly === undefined ? Boolean(current.roundTripOnly) : Boolean(input.roundTripOnly)};
     for (const [key,fallback,max] of [['minSpend',0,1000000000],['maxDiscount',0,1000000000],['maxUses',1000,1000000],['perCustomer',1,1000000]]) {p[key]=Number(input[key] ?? current[key] ?? fallback);if(!Number.isSafeInteger(p[key]) || p[key]<(key==='maxUses'||key==='perCustomer' ? 1 : 0) || p[key]>max) fail(400,'Giới hạn '+key+' không hợp lệ.');}
     p.startsAt=input.startsAt ?? current.startsAt ?? now(); p.expiresAt=input.expiresAt ?? current.expiresAt ?? new Date(Date.now()+30*86400000).toISOString();
-    if (typeof p.startsAt !== 'string' || typeof p.expiresAt !== 'string' || !/Z$|[+-]\d\d:\d\d$/.test(p.startsAt) || !/Z$|[+-]\d\d:\d\d$/.test(p.expiresAt) || !Number.isFinite(Date.parse(p.startsAt)) || !Number.isFinite(Date.parse(p.expiresAt)) || Date.parse(p.startsAt)>=Date.parse(p.expiresAt)) fail(400,'Thời gian ưu đãi cần ISO có múi giờ; hết hạn sau ngày bắt đầu.');
+    const validTime=value=>{
+      if(typeof value!=='string')return false;
+      const match=value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2})$/);
+      if(!match)return false;
+      const [,year,month,day,hour,minute,second='0']=match;
+      const leap=Number(year)%4===0 && (Number(year)%100!==0 || Number(year)%400===0);
+      const days=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
+      return Number(month)>=1 && Number(month)<=12 && Number(day)>=1 && Number(day)<=days[Number(month)-1]
+        && Number(hour)<24 && Number(minute)<60 && Number(second)<60 && Number.isFinite(Date.parse(value));
+    };
+    if (!validTime(p.startsAt) || !validTime(p.expiresAt) || Date.parse(p.startsAt)>=Date.parse(p.expiresAt)) fail(400,'Thời gian ưu đãi cần ISO có ngày hợp lệ và múi giờ; hết hạn sau ngày bắt đầu.');
     p.startsAt=new Date(p.startsAt).toISOString();p.expiresAt=new Date(p.expiresAt).toISOString();
     for (const key of ['operatorIds','routeIds']) {p[key]=input[key] ?? current[key] ?? [];if(!Array.isArray(p[key]) || p[key].length>100 || p[key].some(x=>typeof x!=='string' || x.length>100) || new Set(p[key]).size!==p[key].length) fail(400,'Danh sách '+key+' không hợp lệ.');}
     for (const id of p.operatorIds) if (!await db.get('SELECT id FROM operators WHERE id=?',[id])) fail(400,'Nhà xe giới hạn ưu đãi không tồn tại.');

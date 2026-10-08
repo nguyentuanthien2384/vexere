@@ -167,11 +167,11 @@ async function createApi(options={}) {
     }
     const where = clauses.length ? ' WHERE '+clauses.join(' AND ') : '';
     const count = await db.get('SELECT COUNT(*) AS n FROM trips t JOIN operators o ON o.id=t.operator_id'+where,args);
-    let order = query.sort === 'price' ? 't.price ASC,t.departure_at ASC' : 't.departure_at ASC,t.price ASC';
+    let order = query.sort === 'price' ? 't.price ASC,t.departure_at ASC,t.id ASC' : 't.departure_at ASC,t.price ASC,t.id ASC';
     const orderArgs=[];
     if (query.sort === 'rating') {
       const ops=await db.all('SELECT id,data FROM operators');
-      if (ops.length) { order='CASE t.operator_id '+ops.map(op => {orderArgs.push(op.id,Number(parse(op.data).rating || 0)); return 'WHEN ? THEN ?';}).join(' ')+' ELSE 0 END DESC,t.departure_at ASC'; }
+      if (ops.length) { order='CASE t.operator_id '+ops.map(op => {orderArgs.push(op.id,Number(parse(op.data).rating || 0)); return 'WHEN ? THEN ?';}).join(' ')+' ELSE 0 END DESC,t.departure_at ASC,t.id ASC'; }
     }
     const rows = await db.all(tripSelect+where+' ORDER BY '+order+' LIMIT ? OFFSET ?',[...args,...orderArgs,limit,(page-1)*limit]);
     const trips = rows.map(decorate);
@@ -374,12 +374,19 @@ async function createApi(options={}) {
   router.post('/reviews',requireUser,endpoint(async (req,res) => {
     const code=clean(req.body.bookingCode,30).toUpperCase(),rating=Number(req.body.rating),title=clean(req.body.title,150),comment=clean(req.body.comment,2000);
     if (!Number.isInteger(rating) || rating<1 || rating>5 || comment.length<10) fail(400,'Đánh giá cần từ 1 đến 5 sao và nhận xét ít nhất 10 ký tự.');
-    const booking=await getBooking(code);
-    if (!booking || booking.userId !== req.user.id) fail(404,'Không tìm thấy vé của bạn.','NOT_FOUND');
-    if (booking.paymentStatus !== 'paid' || booking.status !== 'confirmed' || booking.source === 'demo') fail(409,'Chỉ được đánh giá chuyến đi thực tế đã thanh toán.','REVIEW_NOT_ELIGIBLE');
-    const departure=Date.parse(booking.trip.date+'T'+booking.trip.departureTime+':00+07:00');
-    if (departure+booking.trip.durationMinutes*60000>Date.now()) fail(409,'Vui lòng đánh giá sau khi chuyến đi hoàn tất.','REVIEW_NOT_ELIGIBLE');
+    const initial=await db.get('SELECT trip_id FROM bookings WHERE code=?',[code]);
+    if (!initial) fail(404,'Không tìm thấy vé của bạn.','NOT_FOUND');
     await db.transaction(async tx => {
+      // Match cancellation/rescheduling lock order, then validate the current
+      // booking so a queued cancellation cannot leave a stale eligible review.
+      await tx.get('SELECT id FROM trips WHERE id=?'+lock,[initial.trip_id]);
+      const row=await tx.get('SELECT trip_id,user_id FROM bookings WHERE code=?'+lock,[code]);
+      if (!row || row.user_id !== req.user.id) fail(404,'Không tìm thấy vé của bạn.','NOT_FOUND');
+      if (row.trip_id !== initial.trip_id) fail(409,'Vé vừa được đổi chuyến. Vui lòng tải lại.','CONFLICT');
+      const booking=await getBooking(code,tx);
+      if (booking.paymentStatus !== 'paid' || booking.status !== 'confirmed' || booking.source === 'demo') fail(409,'Chỉ được đánh giá chuyến đi thực tế đã thanh toán.','REVIEW_NOT_ELIGIBLE');
+      const departure=Date.parse(booking.trip.date+'T'+booking.trip.departureTime+':00+07:00');
+      if (departure+booking.trip.durationMinutes*60000>Date.now()) fail(409,'Vui lòng đánh giá sau khi chuyến đi hoàn tất.','REVIEW_NOT_ELIGIBLE');
       const op=await tx.get('SELECT * FROM operators WHERE id=?'+lock,[booking.trip.operatorId]);
       if (await tx.get('SELECT id FROM reviews WHERE booking_code=?',[code])) fail(409,'Bạn đã đánh giá chuyến này.','ALREADY_REVIEWED');
       await tx.run('INSERT INTO reviews(id,booking_code,operator_id,user_id,rating,title,comment,created_at) VALUES(?,?,?,?,?,?,?,?)',[crypto.randomUUID(),code,booking.trip.operatorId,req.user.id,rating,title,comment,nowISO()]);

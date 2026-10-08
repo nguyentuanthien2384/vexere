@@ -1,0 +1,91 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:ci
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-${{ matrix.os }}
+          path: artifacts/tests/coverage/
+          if-no-files-found: warn
+
+  postgres:
+    name: PostgreSQL 16
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ticket4t
+          POSTGRES_PASSWORD: ci-test-password
+          POSTGRES_DB: ticket4t_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ticket4t -d ticket4t_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:postgres
+        env:
+          TEST_DATABASE_URL: postgresql://ticket4t:ci-test-password@127.0.0.1:5432/ticket4t_test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: postgres
+          path: artifacts/tests/postgres/
+          if-no-files-found: warn
+
+  browser:
+    name: Chromium UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ui:all
+        env:
+          BROWSER_CHANNEL: chromium
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser
+          path: |
+            artifacts/tests/ui/
+            artifacts/screenshots/
+          if-no-files-found: warn

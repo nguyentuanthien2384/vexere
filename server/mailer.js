@@ -15,10 +15,13 @@ function createMailer(db, env, dataDir) {
     if (transport) {
       try {
         await transport.sendMail({from:env.SMTP_FROM || env.SMTP_USER,to,subject,text,html});
-        if (!sensitive || env.NODE_ENV !== 'production') await db.transaction(tx => tx.run("UPDATE email_outbox SET status='sent' WHERE id=?",[entry.id]));
-        return {delivered:true};
       }
       catch (error) { console.error('Email delivery failed:',error.code || 'SMTP_ERROR'); return {delivered:false}; }
+      if (!sensitive || env.NODE_ENV !== 'production') {
+        try { await db.transaction(tx => tx.run("UPDATE email_outbox SET status='sent' WHERE id=?",[entry.id])); }
+        catch { console.error('Email outbox recording failed:','OUTBOX_STATUS_ERROR'); }
+      }
+      return {delivered:true};
     }
     // No production fallback stores verification or recovery tokens unencrypted.
     if (env.NODE_ENV === 'production') return {delivered:false};

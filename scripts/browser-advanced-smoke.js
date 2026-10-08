@@ -5,22 +5,24 @@ const os=require('node:os');
 const path=require('node:path');
 const {chromium}=require('playwright');
 const {createApp}=require('../index');
+const {cleanupBrowserTest}=require('./browser-test-helpers');
 const {addDays}=require('../server/catalog');
 
 (async()=>{
   const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'ticket4t-browser-v3-'));
+  let runtime,server,browser,testFailure;
+  try {
   const output=path.resolve('artifacts/screenshots');await fs.mkdir(output,{recursive:true});
-  const runtime=await createApp({env:{NODE_ENV:'development',SEED_DEMO:'true',SESSION_SECRET:'advanced-ui-tests-only-'.repeat(3)},dataDir,seedDays:5,disableRateLimit:true});
-  const server=runtime.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+  runtime=await createApp({env:{NODE_ENV:'development',SEED_DEMO:'true',SESSION_SECRET:'advanced-ui-tests-only-'.repeat(3)},dataDir,seedDays:5,disableRateLimit:true});
+  server=runtime.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
   const base='http://127.0.0.1:'+server.address().port;
-  const browser=await chromium.launch({channel:process.env.BROWSER_CHANNEL||'chrome',headless:true});
+  browser=await chromium.launch({channel:process.env.BROWSER_CHANNEL||'chrome',headless:true});
   const failures=[];
   const instrument=page=>{
     page.on('pageerror',e=>failures.push(e.message));
     page.on('console',m=>{if(m.type()==='error'&&/Content Security Policy|Refused to|Uncaught/.test(m.text()))failures.push(m.text());});
     page.on('response',r=>{if(r.status()===404&&!r.url().includes('/api/')&&!r.url().endsWith('/favicon.ico'))failures.push('404 '+r.url());});
   };
-  try {
     const page=await browser.newPage({viewport:{width:1440,height:1000}});instrument(page);
     const bootstrap=await(await fetch(base+'/api/bootstrap')).json(),outDate=addDays(bootstrap.today,1),backDate=addDays(bootstrap.today,2),changeDate=addDays(bootstrap.today,3);
     await page.goto(base);await page.locator('#search-form').waitFor();
@@ -86,6 +88,6 @@ const {addDays}=require('../server/catalog');
     const staff=await browser.newPage({viewport:{width:1440,height:1000}});instrument(staff);await staff.goto(base+'/admin');await staff.fill('#login-form [name="email"]','operator@ticket4t.vn');await staff.fill('#login-form [name="password"]','Nhaxe@12345');await staff.locator('#login-form button[type="submit"]').click();await staff.locator('#portal').waitFor({state:'visible'});assert.equal(await staff.locator('[data-page="promotions"]:visible').count(),0,'Operator cannot manage global promotions');
     assert.deepEqual(failures,[],'No browser errors, blocked scripts, or missing assets');
     console.log('Advanced UI passed: round-trip holds, draft refresh, valid/expired quota coupons, atomic order, guest reschedule, partial cancellation, saved/compared trips, admin promotions/manifest and mobile layouts.');
-  } catch(error) {console.error(error);process.exitCode=1;}
-  finally {await browser.close();await new Promise(r=>server.close(r));await runtime.close();const cleanupTarget=path.resolve(dataDir),tempRoot=path.resolve(os.tmpdir())+path.sep;if(!cleanupTarget.startsWith(tempRoot)||!path.basename(cleanupTarget).startsWith('ticket4t-browser-v3-'))throw new Error('Invalid temporary cleanup path.');await fs.rm(cleanupTarget,{recursive:true,force:true});}
+  } catch(error){testFailure=error;throw error;}
+  finally {await cleanupBrowserTest({browser,server,runtime,dataDir,prefix:'ticket4t-browser-v3-'},testFailure);}
 })().catch(e=>{console.error(e);process.exitCode=1;});

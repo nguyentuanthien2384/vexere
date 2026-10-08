@@ -6,27 +6,29 @@ const os=require('node:os');
 const path=require('node:path');
 const {chromium}=require('playwright');
 const {createApp}=require('../index');
+const {cleanupBrowserTest}=require('./browser-test-helpers');
 const {addDays}=require('../server/catalog');
 
 (async()=>{
   const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'ticket4t-browser-api-'));
+  let runtime,server,browser,testFailure;
+  try {
   const env={NODE_ENV:'test',SEED_DEMO:'true',SESSION_SECRET:'api-browser-tests-only-'.repeat(3),APP_URL:'http://127.0.0.1',
     VNPAY_TMN_CODE:'TEST',VNPAY_HASH_SECRET:'test-only-secret',VNPAY_URL:'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html',
     MOMO_PARTNER_CODE:'TEST',MOMO_ACCESS_KEY:'test-access',MOMO_SECRET_KEY:'test-secret',
     ZALOPAY_APP_ID:'2553',ZALOPAY_KEY1:'test-key1',ZALOPAY_KEY2:'test-key2'};
   let walletRequests=0,failNextWallet=false;
   const walletFetch=async (url,options)=>{walletRequests++;if(failNextWallet){failNextWallet=false;throw new Error('Mock provider connection lost');}const body=JSON.parse(options.body);return {ok:true,status:200,json:async()=>String(url).includes('momo')?{resultCode:0,payUrl:'https://test-payment.momo.vn/pay',partnerCode:body.partnerCode,orderId:body.orderId,requestId:body.requestId,amount:body.amount}:{return_code:1,order_url:'https://sbgateway.zalopay.vn/pay'}};};
-  const runtime=await createApp({env,dataDir,seedDays:5,disableRateLimit:true,walletFetch});
-  const server=runtime.app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+  runtime=await createApp({env,dataDir,seedDays:5,disableRateLimit:true,walletFetch});
+  server=runtime.app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
   const base=env.APP_URL='http://127.0.0.1:'+server.address().port;
-  const browser=await chromium.launch({channel:process.env.BROWSER_CHANNEL||'chrome',headless:true});
+  browser=await chromium.launch({channel:process.env.BROWSER_CHANNEL||'chrome',headless:true});
   const errors=[];
   async function pageForTest(){const context=await browser.newContext();const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));await page.route(/^https:\/\/(sandbox\.vnpayment\.vn|test-payment\.momo\.vn|sbgateway\.zalopay\.vn)\//,route=>route.fulfill({contentType:'text/html',body:'<title>Mock payment gateway</title><p>Payment gateway test</p>'}));return {page,context};}
   const bootstrap=await(await fetch(base+'/api/bootstrap')).json(),date=addDays(bootstrap.today,2),backDate=addDays(bootstrap.today,3);
   async function choose(page,url,count=1){await page.goto(url);await page.locator('[data-action="seat"]:enabled').first().waitFor();for(let i=0;i<count;i++)await page.locator('[data-action="seat"]:enabled').nth(i).click();await page.locator('[data-action="checkout"]').click();}
   async function demoCheckout(page,roundtrip=false){await page.goto(base+'/#/search?'+new URLSearchParams({from:'ho-chi-minh',to:'da-lat',date,...(roundtrip?{mode:'roundtrip',returnDate:backDate,leg:'outbound'}:{})}));await page.locator('.trip-card .btn').first().waitFor();await page.locator('.trip-card .btn').first().click();await page.locator('[data-action="seat"]:enabled').first().waitFor();await page.locator('[data-action="seat"]:enabled').first().click();await page.locator('[data-action="checkout"]').click();if(roundtrip){await page.waitForURL(/leg=return/);await page.locator('.trip-card .btn').first().waitFor();await page.locator('.trip-card .btn').first().click();await page.locator('[data-action="seat"]:enabled').first().waitFor();await page.locator('[data-action="seat"]:enabled').first().click();await page.locator('[data-action="checkout"]').click();}await page.locator('#checkout-form').waitFor();}
   async function fillGuest(page,email){await page.fill('#fullName','Khách kiểm thử API');await page.fill('#phone','0916666777');await page.fill('#email',email);await page.check('#checkout-form [name="consent"]');}
-  try{
     for(const roundtrip of [false,true]){
       const {page,context}=await pageForTest(),endpoint=roundtrip?'/api/orders':'/api/bookings',email=roundtrip?'lost-order@example.test':'lost-booking@example.test';
       await demoCheckout(page,roundtrip);await fillGuest(page,email);
@@ -90,5 +92,6 @@ const {addDays}=require('../server/catalog');
     }
     assert.deepEqual(errors,[],'API reliability flows cause no browser exceptions');
     console.log('API browser passed: lost-response retries for tickets/orders, changed attempts, three payment providers, return/resume/status recovery, gateway failure recovery, contact isolation and live seat updates.');
-  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));await runtime.close();const target=path.resolve(dataDir);if(!target.startsWith(path.resolve(os.tmpdir())+path.sep)||!path.basename(target).startsWith('ticket4t-browser-api-'))throw new Error('Invalid temporary cleanup path.');await fs.rm(target,{recursive:true,force:true});}
+  } catch(error){testFailure=error;throw error;}
+  finally {await cleanupBrowserTest({browser,server,runtime,dataDir,prefix:'ticket4t-browser-api-'},testFailure);}
 })().catch(error=>{console.error(error);process.exitCode=1;});

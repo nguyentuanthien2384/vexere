@@ -3,25 +3,27 @@
 // Small RFC 4180 parser for a bounded operator import. Quotes and embedded newlines
 // are handled without evaluating content; every resulting field is then validated.
 function parseCsv(text) {
-  if (typeof text !== 'string' || text.length>1000000) throw new Error('CSV cần là văn bản UTF-8 không quá 1 MB.');
-  const rows=[]; let row=[],field='',quoted=false;
+  if (typeof text !== 'string' || Buffer.byteLength(text,'utf8')>1000000) throw new Error('CSV cần là văn bản UTF-8 không quá 1 MB.');
+  const rows=[]; let row=[],field='',quoted=false,closedQuote=false;
   const input=text.replace(/^\uFEFF/,'');
   for (let i=0;i<input.length;i++) {
     const c=input[i];
+    if (closedQuote && c!==',' && c!=='\n' && c!=='\r') throw new Error('CSV có ký tự không hợp lệ sau dấu ngoặc kép đóng.');
     if (c === '"') {
       if (quoted && input[i+1] === '"') {field+='"';i++;}
-      else if (quoted) quoted=false;
+      else if (quoted) {quoted=false;closedQuote=true;}
       else if (field === '') quoted=true;
       else throw new Error('CSV có dấu ngoặc kép không hợp lệ.');
-    } else if (c === ',' && !quoted) {row.push(field);field='';}
+    } else if (c === ',' && !quoted) {row.push(field);field='';closedQuote=false;}
     else if ((c === '\n' || c === '\r') && !quoted) {
       if (c === '\r' && input[i+1] === '\n') i++;
-      row.push(field);if (row.some(value => value.trim())) rows.push(row);row=[];field='';
+      row.push(field);if (row.some(value => value.trim())) rows.push(row);row=[];field='';closedQuote=false;
     } else field+=c;
     if (rows.length>501 || field.length>10000) throw new Error('CSV vượt quá 500 chuyến hoặc có ô quá dài.');
   }
   if (quoted) throw new Error('CSV thiếu dấu ngoặc kép đóng.');
   row.push(field); if (row.some(value => value.trim())) rows.push(row);
+  if (rows.length>501) throw new Error('CSV vượt quá 500 chuyến hoặc có ô quá dài.');
   if (rows.length<2) throw new Error('CSV cần hàng tiêu đề và ít nhất một chuyến.');
   const headers=rows.shift().map(value => value.trim());
   const allowed=['operatorId','from','to','date','departureTime','durationMinutes','price','totalSeats','type','pickupPoints','dropoffPoints','amenities','policies','seatPrices'];
