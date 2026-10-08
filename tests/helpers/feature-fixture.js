@@ -4,20 +4,42 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const {createApp} = require('../../index');
 const {todayVietnam,addDays} = require('../../server/catalog');
 
-async function createFeatureFixture(t,{disableRateLimit=true}={}) {
+async function createFeatureFixture(t,{disableRateLimit=true,databaseUrl}={}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(),'ticket4t-feature-contracts-'));
   const env = {NODE_ENV:'test',SEED_DEMO:'false',SESSION_SECRET:'feature-contracts-isolated-session-secret',ADMIN_EMAIL:'feature-admin@example.test',ADMIN_PASSWORD:'FeatureAdmin@12345'};
-  let runtime,server,adminCookie,operator;
+  let runtime,server,adminCookie,operator,postgresControl,postgresSchema;
   t.after(async () => {
-    if (server) await new Promise(resolve => server.close(resolve));
-    if (runtime) await runtime.close();
-    const target = path.resolve(dataDir);
-    assert.ok(target.startsWith(path.resolve(os.tmpdir())+path.sep) && path.basename(target).startsWith('ticket4t-feature-contracts-'));
-    await fs.rm(target,{recursive:true,force:true});
+    const failures=[];
+    try {if (server) await new Promise((resolve,reject) => {server.close(error=>error?reject(error):resolve());server.closeAllConnections?.();});} catch(error){failures.push(error);}
+    try {if (runtime) await runtime.close();} catch(error){failures.push(error);}
+    try {if(postgresSchema)await postgresControl.query('DROP SCHEMA "'+postgresSchema+'" CASCADE');} catch(error){failures.push(error);}
+    try {if(postgresControl)await postgresControl.end();} catch(error){failures.push(error);}
+    try {
+      const target = path.resolve(dataDir);
+      assert.ok(target.startsWith(path.resolve(os.tmpdir())+path.sep) && path.basename(target).startsWith('ticket4t-feature-contracts-'));
+      await fs.rm(target,{recursive:true,force:true});
+    } catch(error){failures.push(error);}
+    if(failures.length)throw new AggregateError(failures,'Feature fixture cleanup failed');
   });
+  if(databaseUrl){
+    // Each opt-in PostgreSQL case gets its own schema, even when a file shares
+    // the runner's database URL. Never use the public application schema.
+    const url=new URL(databaseUrl);
+    const database=decodeURIComponent(url.pathname.slice(1));
+    assert.ok(['postgres:','postgresql:'].includes(url.protocol) && /(^|[_-])test([_-]|$)/i.test(database),'PostgreSQL fixtures require a dedicated test database');
+    const {Client}=require('pg');
+    const ssl=process.env.PG_SSL==='true'?{rejectUnauthorized:process.env.PG_SSL_REJECT_UNAUTHORIZED!=='false'}:undefined;
+    postgresControl=new Client({connectionString:databaseUrl,ssl});await postgresControl.connect();
+    const schema='ticket4t_case_'+crypto.randomBytes(12).toString('hex');
+    await postgresControl.query('CREATE SCHEMA "'+schema+'"');postgresSchema=schema;
+    url.searchParams.set('options','-c search_path='+schema);
+    env.DATABASE_URL=url.href;
+    if(ssl){env.PG_SSL='true';env.PG_SSL_REJECT_UNAUTHORIZED=String(ssl.rejectUnauthorized);}
+  }
   runtime = await createApp({env,dataDir,seedDemo:false,disableRateLimit});
   server = runtime.app.listen(0,'127.0.0.1');
   await new Promise(resolve => server.once('listening',resolve));

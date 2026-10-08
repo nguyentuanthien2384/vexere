@@ -14,6 +14,7 @@ const {adminStats,dateRange,addDateClauses,bookingTripField}=require('./admin-an
 const {getIntegrationStatus}=require('./integration-status');
 const {fetchOperatorFeed}=require('./operator-feed');
 const {createWalletPayments}=require('./wallet-payments');
+const {times,parseSearchQuery,literalSearchPattern,normalizedTextSql,tripTextSql,ratingSql,availableSeatsQuery}=require('./search');
 
 class ApiError extends Error { constructor(status,message,code='VALIDATION_ERROR') { super(message); this.status = status; this.code = code; } }
 function fail(status,message,code) { throw new ApiError(status,message,code); }
@@ -117,7 +118,8 @@ async function createApi(options={}) {
     return {...trip,id:row.id,operatorId:row.operator_id,operatorName:op?.name || trip.operatorName,
       rating:op?.rating ?? trip.rating ?? 0,reviewCount:op?.reviewCount ?? 0,
       bookingCutoffAt,bookingOpen:row.active === 1 && row.operator_active === 1 && Date.parse(bookingCutoffAt)>Date.now(),
-      active:row.active === 1,source:row.source,bookedSeats:Number(row.reserved_count || 0),heldSeats:Number(row.held_count || 0),occupiedSeats:Number(row.reserved_count || 0)+Number(row.held_count || 0),availableSeats:Math.max(0,row.total_seats-Number(row.reserved_count || 0)-Number(row.held_count || 0))};
+      active:row.active === 1,source:row.source,bookedSeats:Number(row.reserved_count || 0),heldSeats:Number(row.held_count || 0),occupiedSeats:Number(row.reserved_count || 0)+Number(row.held_count || 0),availableSeats:row.available_count !== undefined ? Number(row.available_count) : Math.max(0,row.total_seats-Number(row.reserved_count || 0)-Number(row.held_count || 0)),
+      ...(row.display_price !== undefined ? {displayPrice:row.display_price === null ? null : Number(row.display_price),minAvailablePrice:row.min_available_price === null ? null : Number(row.min_available_price),maxAvailablePrice:row.max_available_price === null ? null : Number(row.max_available_price),matchingSeats:Number(row.matching_seats)} : {})};
   }
   const tripSelect = 'SELECT t.*,o.data AS operator_data,o.active AS operator_active,(SELECT COUNT(*) FROM reserved_seats s WHERE s.trip_id=t.id) AS reserved_count,(SELECT COUNT(*) FROM hold_seats hs WHERE hs.trip_id=t.id) AS held_count FROM trips t JOIN operators o ON o.id=t.operator_id';
   async function getTrip(id,tx=db,{activeOnly=false}={}) {
@@ -138,44 +140,46 @@ async function createApi(options={}) {
   }
   async function mode() { if (env.NODE_ENV === 'production') return 'managed'; const row = await db.get("SELECT COUNT(*) AS n FROM trips WHERE source='demo' AND active=1"); return Number(row.n) ? 'demo' : 'managed'; }
   async function tripSearch(query,req,admin=false) {
+    query=parseSearchQuery(query,{defaultDate:admin ? undefined : todayVietnam(),fail});
+    for (const key of ['from','to']) if (query[key] && !await db.get('SELECT id FROM locations WHERE id=?',[query[key]])) fail(400,'Điểm đi hoặc điểm đến không hợp lệ.');
+    if (query.operator && !await db.get('SELECT id FROM operators WHERE id=?',[query.operator])) fail(400,'Nhà xe không hợp lệ.');
     await refreshExpired();
-    const {page,limit} = pageArgs(query);
+    const {limit} = query;
     const clauses = [], args = [];
     if (!admin) { clauses.push('t.active=1','o.active=1','t.departure_at>?'); args.push(bookingCutoff()); }
     if (!admin && env.NODE_ENV === 'production') clauses.push("t.source='managed'");
     if (admin && req.user.role === 'operator') { clauses.push('t.operator_id=?'); args.push(req.user.operatorId || ''); }
     for (const [param,column] of [['from','from_id'],['to','to_id'],['date','date'],['operator','operator_id'],['type','type']]) {
-      if (query[param]) { clauses.push('t.'+column+'=?'); args.push(clean(query[param])); }
+      if (query[param]) { clauses.push('t.'+column+'=?'); args.push(query[param]); }
     }
-    if (query.date && !validDate(query.date)) fail(400,'Ngày đi không hợp lệ.');
-    for (const [param,op] of [['minPrice','>='],['maxPrice','<=']]) if (query[param] !== undefined && query[param] !== '') {
-      const value = Number(query[param]); if (!Number.isFinite(value) || value < 0) fail(400,'Khoảng giá không hợp lệ.');
-      clauses.push('t.price'+op+'?'); args.push(value);
+    if (admin) for (const [param,op] of [['minPrice','>='],['maxPrice','<=']]) if (query[param] !== undefined) {
+      clauses.push('t.price'+op+'CAST(? AS NUMERIC)'); args.push(query[param]);
     }
-    const times = {morning:['06:00','12:00'],afternoon:['12:00','18:00'],evening:['18:00','24:00'],night:['00:00','06:00']};
-    if (query.time && times[query.time]) { clauses.push('t.departure_time>=? AND t.departure_time<?'); args.push(...times[query.time]); }
+    if (query.time) { clauses.push('t.departure_time>=? AND t.departure_time<?'); args.push(...times[query.time]); }
     for (const key of ['q','pickup','dropoff']) if (query[key]) {
-      const jsonField=field => db.dialect === 'postgres' ? "COALESCE((t.data::jsonb->'"+field+"')::text,'')" : "COALESCE(json_extract(t.data,'$."+field+"'),'')";
-      const field=key === 'q' ? '('+['pickupPoints','dropoffPoints','stops','operatorName','fromName','toName','amenities','typeName'].map(jsonField).join(' || ')+' || o.name)' : jsonField(key === 'pickup' ? 'pickupPoints' : 'dropoffPoints');
-      if (db.dialect === 'postgres') {
-        // PostgreSQL clusters using LC_CTYPE=C do not fold Vietnamese letters.
-        // Explicit mapping makes the same search behavior portable across locales.
-        const upper='ÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÈÉẺẼẸÊỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢÙÚỦŨỤƯỪỨỬỮỰỲÝỶỸỴĐ';
-        clauses.push('LOWER(TRANSLATE('+field+',?,?)) LIKE ?');args.push(upper,upper.toLocaleLowerCase('vi'));
-      } else clauses.push('vi_lower('+field+') LIKE ?');
-      args.push('%'+clean(query[key],100).toLocaleLowerCase('vi')+'%');
+      clauses.push(normalizedTextSql(tripTextSql(key,db.dialect),db.dialect) + " LIKE ? ESCAPE '!'");
+      args.push(literalSearchPattern(query[key]));
     }
     const where = clauses.length ? ' WHERE '+clauses.join(' AND ') : '';
-    const count = await db.get('SELECT COUNT(*) AS n FROM trips t JOIN operators o ON o.id=t.operator_id'+where,args);
-    let order = query.sort === 'price' ? 't.price ASC,t.departure_at ASC,t.id ASC' : 't.departure_at ASC,t.price ASC,t.id ASC';
-    const orderArgs=[];
-    if (query.sort === 'rating') {
-      const ops=await db.all('SELECT id,data FROM operators');
-      if (ops.length) { order='CASE t.operator_id '+ops.map(op => {orderArgs.push(op.id,Number(parse(op.data).rating || 0)); return 'WHEN ? THEN ?';}).join(' ')+' ELSE 0 END DESC,t.departure_at ASC,t.id ASC'; }
+    let prefix='',source=tripSelect+where,parameters=args;
+    if (!admin) {
+      const inventory=availableSeatsQuery(source,query,db.dialect);
+      prefix=inventory.sql;source='SELECT t.* FROM searched_trips t';parameters=[...args,...inventory.params];
+    } else if (query.available !== undefined) {
+      // Admin prices refer to the base fare; availability still reflects inventory.
+      const inventory=availableSeatsQuery(source,{available:query.available},db.dialect);
+      prefix=inventory.sql;source='SELECT t.* FROM searched_trips t';
     }
-    const rows = await db.all(tripSelect+where+' ORDER BY '+order+' LIMIT ? OFFSET ?',[...args,...orderArgs,limit,(page-1)*limit]);
+    const count=await db.get(prefix+'SELECT COUNT(*) AS n FROM ('+source+') search_count',parameters);
+    const total=Number(count.n),pages=Math.ceil(total/limit),page=Math.min(query.page,pages || 1);
+    const price=admin ? 't.price' : 't.display_price';
+    const priceOrder=(admin ? '' : '('+price+' IS NULL) ASC,')+price+' ASC';
+    const order=query.sort === 'price' ? priceOrder+',t.departure_at ASC,t.id ASC'
+      : query.sort === 'rating' ? ratingSql(admin && !prefix ? 'o.data' : 't.operator_data',db.dialect)+' DESC,t.departure_at ASC,t.id ASC'
+      : 't.departure_at ASC,'+priceOrder+',t.id ASC';
+    const rows=await db.all(prefix+source+' ORDER BY '+order+' LIMIT ? OFFSET ?',[...parameters,limit,(page-1)*limit]);
     const trips = rows.map(decorate);
-    return {trips,total:Number(count.n),page,pages:Math.ceil(Number(count.n)/limit)};
+    return {trips,total,page,pages};
   }
   features=createBookingFeatures({db,env,fail,endpoint,clean,phone,validPhone,validEmail,getTrip,getBooking,bookingOwner,audit,adminAudit,staffActor,expire,refreshExpired,requireUser,requireAdmin,scope,payments,walletPayments,mail});
   features.installPublic(router);
@@ -184,12 +188,14 @@ async function createApi(options={}) {
   router.get('/demo-scenarios',endpoint(async(req,res)=>{if(env.NODE_ENV === 'production' || !seedDemo)fail(404,'Không tìm thấy.','NOT_FOUND');const row=await db.get('SELECT value FROM settings WHERE key=?',['demo_scenarios']);res.json(row ? parse(row.value) : {scenarios:[]});}));
   router.get('/locations',endpoint(async (req,res) => res.json({locations:await db.all('SELECT * FROM locations ORDER BY name')})));
   router.get('/bootstrap',endpoint(async (req,res) => {
+    await refreshExpired();
     const locations = await db.all('SELECT * FROM locations ORDER BY name');
     const operatorRows = await db.all('SELECT data FROM operators WHERE active=1 ORDER BY name');
     const productionFilter=env.NODE_ENV === 'production' ? " AND t.source='managed'" : '';
     const cutoff=bookingCutoff();
     const counts = await db.get('SELECT COUNT(*) AS trips,COUNT(DISTINCT t.operator_id) AS operators,SUM(total_seats) AS seats FROM trips t JOIN operators o ON o.id=t.operator_id WHERE t.active=1 AND o.active=1 AND t.departure_at>?'+productionFilter,[cutoff]);
-    const actualRoutes = await db.all('SELECT t.from_id,t.to_id,MIN(t.price) AS min_price,MIN(t.data) AS data FROM trips t JOIN operators o ON o.id=t.operator_id WHERE t.active=1 AND o.active=1 AND t.departure_at>?'+productionFilter+' GROUP BY t.from_id,t.to_id',[cutoff]);
+    const routeInventory=availableSeatsQuery(tripSelect+' WHERE t.active=1 AND o.active=1 AND t.departure_at>?'+productionFilter,{available:true},db.dialect);
+    const actualRoutes = await db.all(routeInventory.sql+'SELECT t.from_id,t.to_id,MIN(t.display_price) AS min_price,MIN(t.data) AS data FROM searched_trips t GROUP BY t.from_id,t.to_id',[cutoff]);
     const rank={'ho-chi-minh':0,'ha-noi':1,'da-nang':2};
     actualRoutes.sort((a,b) => (rank[a.from_id] ?? 3)-(rank[b.from_id] ?? 3) || a.to_id.localeCompare(b.to_id));
     const popularRoutes = actualRoutes.slice(0,12).map(r => { const t=parse(r.data); return {id:r.from_id+'--'+r.to_id,from:r.from_id,to:r.to_id,fromName:t.fromName,toName:t.toName,image:locations.find(l => l.id === r.to_id)?.image || t.image,minPrice:r.min_price,durationMinutes:t.durationMinutes}; });
@@ -198,7 +204,7 @@ async function createApi(options={}) {
       today:todayVietnam(),dataMode:await mode(),paymentMethods,emailEnabled:Boolean(env.SMTP_HOST),
       provenance:seedDemo ? 'Dữ liệu mẫu được tạo để kiểm thử; không phải lịch hoặc giá của Vexere. Nhà xe cần nhập kho vé được xác thực để bán thật.' : 'Kho vé do nhà xe hoặc quản trị viên nhập; cần đối soát với nhà xe trước khi mở bán.'});
   }));
-  router.get('/trips',endpoint(async (req,res) => res.json(await tripSearch({...req.query,date:req.query.date || todayVietnam()},req))));
+  router.get('/trips',endpoint(async (req,res) => res.json(await tripSearch(req.query,req))));
   router.get('/trips/:id',endpoint(async (req,res) => {
     await refreshExpired();
     const trip = await getTrip(req.params.id,db,{activeOnly:true});
@@ -208,7 +214,9 @@ async function createApi(options={}) {
     const held=await db.all('SELECT s.seat,h.owner_key FROM hold_seats s JOIN seat_holds h ON h.hash=s.hold_hash WHERE s.trip_id=? AND h.expires_at>?',[trip.id,nowISO()]);
     const holds=Object.fromEntries(held.map(s=>[s.seat,s.owner_key]));
     if (env.NODE_ENV === 'production' && trip.source === 'demo') fail(404,'Không tìm thấy chuyến xe.','NOT_FOUND');
-    res.json({...trip,seats:makeSeats(trip.type,trip.totalSeats).map(s => ({...s,price:trip.seatPrices?.[s.label] ?? trip.price,status:states[s.label] || (holds[s.label] ? 'held' : 'available'),ownHold:Boolean(holds[s.label] && features.ownsHold(req,holds[s.label]))}))});
+    const seats=makeSeats(trip.type,trip.totalSeats).map(s => ({...s,price:trip.seatPrices?.[s.label] ?? trip.price,status:states[s.label] || (holds[s.label] ? 'held' : 'available'),ownHold:Boolean(holds[s.label] && features.ownsHold(req,holds[s.label]))}));
+    const availablePrices=seats.filter(seat=>seat.status==='available').map(seat=>seat.price);
+    res.json({...trip,seats,minAvailablePrice:availablePrices.length ? Math.min(...availablePrices) : null,maxAvailablePrice:availablePrices.length ? Math.max(...availablePrices) : null});
   }));
   router.get('/operators',endpoint(async (req,res) => {
     const rows=await db.all('SELECT data FROM operators WHERE active=1 ORDER BY name'); res.json({operators:rows.map(r => parse(r.data)).filter(op => env.NODE_ENV !== 'production' || op.source !== 'demo')});

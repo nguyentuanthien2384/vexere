@@ -8,12 +8,20 @@ Tiền tố `/api`. JSON UTF-8. Xác thực dùng cookie phiên `ticket4t.sid`. 
 - `GET /health`: tình trạng kết nối database.
 - `GET /locations`: mã và tên địa điểm.
 - `GET /operators`, `GET /operators/:id`: hồ sơ nhà xe và đánh giá. Đánh giá mẫu có `source=demo`, `verifiedBooking=false`.
-- `GET /trips`: truy vấn `from`, `to`, `date`, `operator`, `type`, `minPrice`, `maxPrice`, `time`, `sort`, `page`, `limit`.
+- `GET /trips`: truy vấn `from`, `to`, `date`, `operator`, `type`, `minPrice`, `maxPrice`, `time`, `sort`, `page`, `limit`, `q`, `pickup`, `dropoff`, `available`.
 - `GET /trips/:id`: lịch, điểm đón/trả, tiện ích, chính sách và `seats` gồm nhãn, tầng, giá, trạng thái.
 - `GET /promotions`: các mã ưu đãi đang mở và điều kiện áp dụng.
 - `GET /demo-scenarios`: bộ tình huống mẫu trong chế độ phát triển; không công khai khi chạy production.
 
 `date` dạng `YYYY-MM-DD`, giờ `HH:mm`, giá là số nguyên VND. `time` nhận `morning`, `afternoon`, `evening`, `night`; `sort` nhận `departure`, `price`, `rating`. Loại xe: `limousine`, `sleeper`, `cabin`, `seater`.
+
+Tìm kiếm `q`, `pickup`, `dropoff` không phân biệt hoa/thường hoặc dấu tiếng Việt, nhận cả Unicode phân rã. `%`, `_` và `!` là ký tự trong từ khóa, không phải wildcard. `q` tìm tên nhà xe, tuyến, loại xe, điểm đón/trả, điểm dừng và tiện ích. Mỗi tham số được hỗ trợ chỉ nhận một giá trị chuỗi; lặp tham số hoặc gửi dạng mảng/object, enum/mã địa điểm/mã nhà xe không hợp lệ, ngày không tồn tại, giá âm/không hữu hạn hay `minPrice > maxPrice` trả HTTP 400 `VALIDATION_ERROR`. `page`/`limit` phải là số nguyên dương; giới hạn tối đa lần lượt 10.000 và 100.
+
+`GET /trips` lọc giá trên từng ghế đang trống, bỏ ghế đã đặt hoặc đang giữ. Ít nhất một ghế phải nằm trong toàn bộ khoảng giá; chuyến có ghế 200.000 và 400.000 không khớp khoảng 300.000–300.000. `sort=price` dùng giá thấp nhất của ghế phù hợp. `available=true` chỉ trả chuyến còn ghế trống, `available=false` chỉ trả chuyến hết ghế; bỏ tham số để xem cả hai. Kết quả có `trips`, `total`, `page`, `pages`; yêu cầu trang vượt cuối được đưa về trang cuối còn dữ liệu, kết quả rỗng dùng trang 1.
+
+Mỗi chuyến tìm được giữ `price` là giá cơ sở để tương thích đặt vé/quản trị, đồng thời trả `displayPrice` (giá ghế trống thấp nhất phù hợp bộ lọc), `minAvailablePrice`, `maxAvailablePrice` (khoảng giá toàn bộ ghế trống) và `matchingSeats` (số ghế trống phù hợp). Ba trường giá là `null` khi hết ghế. Giao diện dùng `displayPrice` để hiển thị “Giá từ”; API giữ ghế/đặt vé luôn kiểm tra lại tồn và tính giá trong giao dịch. `bookingOpen` vẫn mô tả giờ mở bán, không thay cho tình trạng còn ghế; khách có thể xem lại chuyến và ghế đang giữ của mình.
+
+`GET /admin/trips` vẫn lọc/sắp xếp theo giá cơ sở của chuyến để quản lý lịch và giá, với kiểm tra tham số, tìm chữ và phân trang tương tự trong phạm vi nhà xe được cấp quyền.
 
 ## Tài khoản
 

@@ -15,8 +15,32 @@
       "preconditions": "Kho test có chuyến ở biên 06:00/12:00/18:00 và chuyến trùng giá/giờ, rating khác nhau.",
       "input": "from/to/date, minPrice/maxPrice, time, type, pickup/dropoff, sort=price/rating và page/limit.",
       "steps": ["Gọi GET /api/trips với bộ lọc kết hợp và qua từng trang.", "Thử ngày không tồn tại, giá âm/NaN/Infinity và tìm kiếm tiếng Việt.", "Lặp lại trang có các chuyến đồng hạng được chèn ngược thứ tự ID."],
-      "expected": "Bộ lọc giờ không chồng lấn; tổng số/trang đúng; thứ tự có ID cuối để ổn định khi đồng hạng; dữ liệu sai trả 400; tìm tên có dấu/viết hoa đúng.",
-      "automation": [{"file": "tests/feature-contracts.test.js", "ids": ["IT-SRCH-"]}, {"file": "tests/advanced.test.js"}, {"file": "scripts/browser-regression-smoke.js"}]
+      "expected": "Bộ lọc giờ không chồng lấn; tổng số/trang đúng; thứ tự có ID cuối để ổn định khi đồng hạng; trang vượt cuối về trang cuối còn dữ liệu; dữ liệu sai trả 400; tìm tên có dấu/viết hoa đúng.",
+      "automation": [{"file": "tests/feature-contracts.test.js", "ids": ["IT-SRCH-"]}, {"file": "tests/advanced.test.js"}, {"file": "tests/search-contracts.test.js", "ids": ["IT-SEARCH-006"]}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-007", "UI-SRCH-008"]}]
+    },
+    {
+      "id": "TC-SEARCH-02", "feature": "Hợp đồng tham số tìm chuyến và tiếng Việt không dấu", "priority": "P1",
+      "preconditions": "Fixture riêng có từ khóa/điểm đón/trả tiếng Việt NFC/NFD và ký tự % _ ! backslash.",
+      "input": "Tham số lặp/mảng/object, time=constructor/__proto__/toString, enum/ID sai, khoảng giá đảo, page=2garbage, limit=2.9, Unicode phân rã, từ khóa không dấu và wildcard literal.",
+      "steps": ["Gọi API với từng đầu vào sai rồi kiểm tra kho hợp lệ vẫn tìm được.", "Tìm q/pickup/dropoff bằng tiếng Việt không dấu, chữ hoa và NFD.", "Trên browser mở URL ngày sai rồi sửa lại; thử giá đảo với nút submit và radio tự áp dụng."],
+      "expected": "API trả 400 VALIDATION_ERROR cho đầu vào sai, không 500 hoặc vô tình trả toàn bộ; từ khóa không phân biệt dấu/case/canonical encoding và ký tự LIKE được tìm literal; UI ngày/giá sai hiện thông báo và không gọi API tìm chuyến.",
+      "automation": [{"file": "tests/unit/search.test.js", "ids": ["UT-SEARCH-"]}, {"file": "tests/search-contracts.test.js", "ids": ["IT-SEARCH-001", "IT-SEARCH-002"]}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-001", "UI-SRCH-002", "UI-SRCH-004", "UI-SRCH-005"]}]
+    },
+    {
+      "id": "TC-SEARCH-03", "feature": "Lọc, sắp xếp và quảng cáo giá theo ghế đang trống", "priority": "P0",
+      "preconditions": "Chuyến có giá cơ sở khác giá ghế; ghế giá rẻ đã đặt/đang giữ; chuyến hết chỗ; sức chứa lẻ ở các sơ đồ.",
+      "input": "Ghế 200.000/400.000 với khoảng 300.000–300.000, min/max và sort=price, available=true/false; hết hạn giữ; đặt ghế giá riêng.",
+      "steps": ["Đối chiếu displayPrice/minAvailablePrice/maxAvailablePrice/matchingSeats với các ghế thật đang trống.", "Giữ/đặt/hết hạn giữ ghế và kiểm tra kết quả cùng giá tuyến phổ biến.", "So sánh public search với admin base fare và tổng checkout; xem card/compare/favorites và bật còn chỗ."],
+      "expected": "Chỉ ghế riêng nằm trong toàn bộ khoảng giá mới khớp; loại ghế đã đặt/giữ; giá nullable khi hết ghế; sort dùng giá khớp; available chia đúng tồn kho; không thay giá cơ sở hoặc tính tiền checkout; admin vẫn lọc giá cơ sở đúng phạm vi; UI hiện giá ghế trống và Hết chỗ.",
+      "automation": [{"file": "tests/search-contracts.test.js", "ids": ["IT-SEARCH-003", "IT-SEARCH-004", "IT-SEARCH-005", "IT-SEARCH-007", "IT-SEARCH-008", "IT-SEARCH-009", "IT-SEARCH-010"]}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-003", "UI-SRCH-006"]}]
+    },
+    {
+      "id": "TC-ROUNDTRIP-02", "feature": "Giữ hành trình khứ hồi qua đổi ngày, so sánh và chuyến đã lưu", "priority": "P0",
+      "preconditions": "Browser riêng đã giữ ghế lượt đi; ít nhất hai chuyến về với ngày về khác; mọi bộ lọc đang bật.",
+      "input": "Đổi ngày về trên form cùng tuyến; mở chuyến về qua compare/favorites, reload trang; chọn ghế và tiếp tục checkout.",
+      "steps": ["Đổi ngày về rồi kiểm tra tất cả filter/sort và token giữ lượt đi.", "Thêm hai chuyến về vào so sánh hoặc lưu chuyến; mở trang tập hợp rồi tải lại.", "Mở chi tiết, kiểm tra breadcrumb về kết quả đúng ngữ cảnh, chọn ghế và tiếp tục khứ hồi.", "Mở chuyến về đã lưu trong phiên mới hoặc khi đang giữ lượt đi của tuyến khác."],
+      "expected": "Hành trình còn giữ chỗ và khớp lượt đi giữ mode=roundtrip, leg=return, returnDate cùng filter/sort; checkout đủ hai lượt đối chiều và token lượt đi không đổi; phiên mới/hành trình khác chuyển chuyến đã lưu sang một chiều, không nhả giữ ghế khác chỉ vì điều hướng; phản hồi cũ không ghi đè trang mới.",
+      "automation": [{"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-009", "UI-SRCH-010", "UI-SRCH-011", "UI-SRCH-012", "UI-SRCH-013"]}]
     },
     {
       "id": "TC-BOOK-01", "feature": "Đặt vé một chiều và giá từ máy chủ", "priority": "P0",
@@ -206,9 +230,9 @@
       "id": "TC-POSTGRES-01", "feature": "PostgreSQL thực và khóa kho vé", "priority": "P0",
       "preconditions": "TEST_DATABASE_URL trỏ database riêng tên có test; runner tạo schema ngẫu nhiên cho từng file.",
       "input": "Commit/rollback, 8 unique/seat contenders, reservation/hold/coupon/receipt và session.",
-      "steps": ["Chạy npm run test:postgres qua bốn bộ đã opt in.", "Kiểm tra reports từng file và schema đã dọn."],
+      "steps": ["Chạy npm run test:postgres qua năm bộ đã opt in, gồm search-contracts.", "Kiểm tra reports từng file và schema từng ca search đã dọn."],
       "expected": "Không bán/thu/tiêu quota trùng; rollback và pool còn dùng được; session đúng; schema test bị xóa sau mỗi bộ, không dùng public schema.",
-      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "tests/postgres/database.test.js", "ids": ["IT-PG-"]}]
+      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "tests/search-contracts.test.js", "ids": ["IT-SEARCH-"]}, {"file": "tests/postgres/database.test.js", "ids": ["IT-PG-"]}]
     },
     {
       "id": "TC-WEB-01", "feature": "Ranh giới web, production và dữ liệu mẫu", "priority": "P0",
@@ -222,9 +246,9 @@
       "id": "TC-UI-01", "feature": "Điều hướng khách, responsive và phản hồi trễ", "priority": "P1",
       "preconditions": "Chrome headless với kho test riêng, viewport desktop/mobile.",
       "input": "Storage sai cấu trúc, đổi route/date/coupon, keyboard Escape, menu/filter mobile.",
-      "steps": ["Chạy toàn bộ sáu browser suites.", "Kiểm tra search/checkout/lookup/admin, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
+      "steps": ["Chạy toàn bộ bảy browser suites.", "Kiểm tra search/checkout/lookup/admin, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
       "expected": "Luồng chính chạy được, không blank screen/overflow; phản hồi trễ không đổi trạng thái mới; keyboard/modal hoạt động; screenshots lưu để xem thủ công, không phải visual baseline tự động.",
-      "automation": [{"file": "scripts/browser-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-admin-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-integrations-smoke.js"}]
+      "automation": [{"file": "scripts/browser-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-admin-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-integrations-smoke.js"}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-"]}]
     },
     {
       "id": "TC-TOOLING-01", "feature": "Test runner, báo cáo và teardown", "priority": "P1",

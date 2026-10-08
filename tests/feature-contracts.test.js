@@ -26,7 +26,8 @@ test('[IT-SRCH-001] time filters partition exact boundaries and composed filters
   assert.equal(first.total,4);assert.equal(second.total,4);assert.equal(first.pages,2);assert.equal(second.pages,2);
   assert.deepEqual([...first.trips,...second.trips].map(item=>item.id),trips.slice(2,6).map(item=>item.id));
   const beyond = f.expect(await f.request('/trips?'+new URLSearchParams({...params,page:'3'})),200).data;
-  assert.equal(beyond.total,4);assert.deepEqual(beyond.trips,[]);
+  assert.equal(beyond.total,4);assert.equal(beyond.page,2);
+  assert.deepEqual(beyond.trips.map(item=>item.id),second.trips.map(item=>item.id));
 });
 
 test('[IT-SRCH-002] malformed dates and non-finite or negative fares return validation errors without hiding valid inventory',async t => {

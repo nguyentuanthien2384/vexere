@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const session = require('express-session');
+const {normalizeSearchText} = require('./search');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -11,11 +12,13 @@ CREATE TABLE IF NOT EXISTS operators (id TEXT PRIMARY KEY, name TEXT NOT NULL, d
 CREATE TABLE IF NOT EXISTS trips (id TEXT PRIMARY KEY, operator_id TEXT NOT NULL REFERENCES operators(id), from_id TEXT NOT NULL REFERENCES locations(id), to_id TEXT NOT NULL REFERENCES locations(id), date TEXT NOT NULL, departure_time TEXT NOT NULL, departure_at TEXT NOT NULL, price INTEGER NOT NULL, total_seats INTEGER NOT NULL, type TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, source TEXT NOT NULL DEFAULT 'managed', data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS trips_search_idx ON trips(from_id,to_id,date,active);
 CREATE INDEX IF NOT EXISTS trips_operator_idx ON trips(operator_id,date);
+CREATE INDEX IF NOT EXISTS trips_date_idx ON trips(date,active,departure_at);
 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, full_name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, phone TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'customer', operator_id TEXT REFERENCES operators(id), verified INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, auth_version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bookings (code TEXT PRIMARY KEY, trip_id TEXT NOT NULL REFERENCES trips(id), user_id TEXT REFERENCES users(id), phone TEXT NOT NULL, email TEXT NOT NULL, status TEXT NOT NULL, payment_status TEXT NOT NULL DEFAULT 'pending', payment_method TEXT NOT NULL, total INTEGER NOT NULL, expires_at TEXT, created_at TEXT NOT NULL, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS bookings_user_idx ON bookings(user_id,created_at);
 CREATE INDEX IF NOT EXISTS bookings_trip_idx ON bookings(trip_id,status);
 CREATE INDEX IF NOT EXISTS bookings_created_idx ON bookings(created_at);
+CREATE INDEX IF NOT EXISTS bookings_expiry_idx ON bookings(status,expires_at,trip_id);
 CREATE TABLE IF NOT EXISTS checkout_requests (key_hash TEXT PRIMARY KEY, request_hash TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS payment_attempts (booking_code TEXT NOT NULL REFERENCES bookings(code), provider TEXT NOT NULL, merchant_order_id TEXT UNIQUE NOT NULL, request_id TEXT NOT NULL, amount INTEGER NOT NULL, status TEXT NOT NULL, payment_url TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(booking_code,provider));
 CREATE TABLE IF NOT EXISTS reserved_seats (trip_id TEXT NOT NULL REFERENCES trips(id), seat TEXT NOT NULL, booking_code TEXT NOT NULL REFERENCES bookings(code), PRIMARY KEY(trip_id,seat));
@@ -69,6 +72,7 @@ async function openDatabase({env = process.env, dataDir} = {}) {
   const filename = env.SQLITE_FILE || path.join(directory, 'ticket4t.sqlite');
   const connection = new DatabaseSync(filename);
   connection.function('vi_lower',{deterministic:true},value => String(value || '').toLocaleLowerCase('vi'));
+  connection.function('vi_search',{deterministic:true},normalizeSearchText);
   connection.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000;');
   connection.exec(SCHEMA);
   const userColumns=connection.prepare('PRAGMA table_info(users)').all().map(column => column.name);

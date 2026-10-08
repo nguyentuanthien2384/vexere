@@ -30,6 +30,11 @@ auditLabels.operator_feed_synced = 'Đồng bộ API nhà xe';
 const dateTime = value => { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',dateStyle:'short',timeStyle:'short'}).format(date); };
 const addDateDays = (value, days) => { const date = new Date(`${value}T12:00:00+07:00`); date.setUTCDate(date.getUTCDate()+days); return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit'}).format(date); };
 function validDate(value) { const date = new Date(`${value}T12:00:00+07:00`); return /^\d{4}-\d{2}-\d{2}$/.test(value || '') && !Number.isNaN(date.getTime()) && addDateDays(value,0) === value; }
+function validateTripFilters(filters) {
+  if (filters.from && filters.to && filters.from === filters.to) throw new Error('Điểm đi và điểm đến phải khác nhau.');
+  if (filters.date && !validDate(filters.date)) throw new Error('Ngày đi không hợp lệ.');
+  if ((filters.q || '').trim().length > 100) throw new Error('Từ khóa tìm chuyến tối đa 100 ký tự.');
+}
 function validateRange(filters) {
   if ((filters.dateFrom && !validDate(filters.dateFrom)) || (filters.dateTo && !validDate(filters.dateTo))) throw new Error('Khoảng ngày chưa hợp lệ.');
   if (filters.dateFrom && filters.dateTo && filters.dateFrom > filters.dateTo) throw new Error('Ngày kết thúc cần bằng hoặc sau ngày bắt đầu.');
@@ -182,7 +187,7 @@ async function navigate(page, preserveFilters = false) {
   if (['operators','users','promotions','integrations'].includes(page) && state.user.role !== 'admin') page = 'dashboard';
   const previousPage = state.page;
   const oldFilters = preserveFilters ? (previousPage === page && $('#filters') ? Object.fromEntries(new FormData($('#filters'))) : state.filters[page] || {}) : {};
-  try { if (['dashboard','audit','bookings'].includes(page)) validateRange(oldFilters); } catch (error) { return toast(error.message,true); }
+  try { if (['dashboard','audit','bookings'].includes(page)) validateRange(oldFilters); if (page === 'trips') validateTripFilters(oldFilters); } catch (error) { return toast(error.message,true); }
   state.filters[page] = oldFilters;
   state.page = page;
   if (!preserveFilters) state.pageNumber = 1;
@@ -743,7 +748,14 @@ document.addEventListener('click', async event => {
   if (action === 'download-operators') return download('ma-nha-xe.json',JSON.stringify(state.operators.map(({id,name}) => ({id,name})),null,2));
 });
 document.addEventListener('submit',async event => {
-  if (event.target.id === 'filters') { event.preventDefault(); state.pageNumber = 1; await navigate(state.page,true); }
+  if (event.target.id === 'filters') {
+    event.preventDefault();
+    if (!event.target.reportValidity()) return;
+    const filters = Object.fromEntries(new FormData(event.target));
+    try { if (state.page === 'trips') validateTripFilters(filters); if (['dashboard','audit','bookings'].includes(state.page)) validateRange(filters); }
+    catch (error) { return toast(error.message,true); }
+    state.pageNumber = 1; await navigate(state.page,true);
+  }
   if (event.target.id === 'import-form') {
     event.preventDefault();
     if (state.importBusy) return;

@@ -1,5 +1,19 @@
 # Kết quả kiểm tra bản 3 — 07/10/2026
 
+## Phát triển tìm kiếm, lọc chuyến và giữ ngữ cảnh khứ hồi — 08/10/2026
+
+- API kiểm tra chặt tham số scalar, enum, ngày thật, mã địa điểm/nhà xe, khoảng giá và số nguyên phân trang. Tham số lặp/mảng/object, prototype names, NUL hoặc giá đảo trả 400; không còn lỗi 500 hay vô tình bỏ lọc. PostgreSQL nhận đúng các biên giá hữu hạn, kể cả fractional/lớn, nhờ bind kiểu numeric.
+- Từ khóa, điểm đón/trả nhận tiếng Việt không dấu, chữ hoa và Unicode NFD. `%`, `_`, `!` và backslash được tìm theo nội dung thật. API và browser có ca hồi quy tương ứng.
+- Lọc/sắp xếp public theo từng ghế đang trống; bỏ ghế đã đặt hoặc giữ tạm. Thêm `displayPrice`, `minAvailablePrice`, `maxAvailablePrice`, `matchingSeats` và `available=true/false`; giữ giá cơ sở `price` và tính tiền đặt vé ở máy chủ. Giá tuyến phổ biến cũng lấy từ ghế trống, bỏ tuyến hết ghế.
+- SQL tính ghế giá cơ sở bằng số lượng và chỉ mở rộng các giá ghế riêng. Sửa truy vấn catalog PostgreSQL bị timeout với kho 7.200 chuyến mẫu; thêm index theo ngày chuyến và hết hạn đặt chỗ. Đây là kiểm thử fixture, chưa phải kiểm thử tải vận hành nhiều người dùng.
+- Browser báo ngày/giá sai trước khi gửi tìm kiếm, kể cả radio tự áp dụng; có lọc còn chỗ và nhãn hết chỗ. Trang vượt cuối được đưa về trang cuối có dữ liệu, cập nhật URL đúng trang. Admin giữ bảng và bộ lọc khi tuyến chọn sai.
+- Đổi ngày trên cùng tuyến giữ filter/sort; compare/favorites giữ chiều về và ghế lượt đi còn hiệu lực. Chuyến về đã lưu trong phiên mới hoặc hành trình khác mở được như một chiều, không gắn nhầm lượt đi hoặc nhả giữ chỗ chỉ vì điều hướng.
+- Thêm **11 unit + 10 API + 13 tình huống browser**. `npm run test:ci` đạt **223/223** (83 unit, 140 integration/component/subprocess), không skip/todo; **75** file JS hợp lệ, **32** tình huống catalogue cùng 4 nhóm kết nối ngoài chưa chạy.
+- Coverage SQLite/backend: **97,21% dòng, 87,89% nhánh, 94,87% hàm**, giữ ngưỡng 95/85/90. Module tìm kiếm đạt 100% dòng/hàm và 95,28% nhánh; coverage này không bao gồm browser hoặc dịch vụ đối tác.
+- PostgreSQL **18.4** thực đạt **62/62** (19 backend, 20 nâng cao, 10 admin, 10 search, 3 database/session). Mỗi file/schema test đã dọn; cluster tạm riêng đã dừng và xóa thư mục. **7/7** bộ Chrome UI đạt, gồm 13 ca tìm/lọc mới và các bộ hiện có.
+
+Hợp đồng mới tại [API](api.md), cách chạy tại [kiểm thử](testing.md), truy vết tại [danh mục ca](test-cases.json). Không đổi `.env` hoặc kho vé đang chạy. Chưa xác minh merchant/SMTP/API nhà xe thực, CI GitHub, PostgreSQL16/Docker hoặc tải lớn trong đợt này.
+
 ## Kiểm định và phát triển bộ test — 08/10/2026
 
 - Trước đợt: 98 ca trộn API/component/helper; coverage baseline 95,20% dòng, 83,76% nhánh, 91,69% hàm, chưa có unit command, coverage gate, JUnit/LCOV hay CI.

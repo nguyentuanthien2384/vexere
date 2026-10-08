@@ -16,7 +16,8 @@ for (const item of catalogue.cases) {
       errors.push(item.id + ' invalid automation file: ' + reference.file); continue;
     }
     const source = fs.readFileSync(file, 'utf8');
-    for (const id of reference.ids || []) if (!source.includes('[' + id)) errors.push(item.id + ' missing automated ID: ' + id);
+    // Node test titles embed [ID]; browser check helpers receive a quoted ID.
+    for (const id of reference.ids || []) if (!['[' + id,"'" + id,'"' + id].some(token=>source.includes(token))) errors.push(item.id + ' missing automated ID: ' + id);
   }
 }
 for (const item of catalogue.pendingExternalCases) {
