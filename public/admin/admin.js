@@ -200,6 +200,7 @@ async function enterPortal(user) {
   if (!['admin','operator'].includes(user?.role)) return showLogin('Tài khoản này chưa có quyền truy cập cổng vận hành.');
   const sessionId = ++state.sessionId;
   state.user = user;
+  window.TicketCounter?.restore(user);
   restoreRescheduleAttempt(user);
   $('#login-screen').hidden = true;
   $('#portal').hidden = false;
@@ -223,6 +224,7 @@ async function navigate(page, preserveFilters = false) {
   if (!state.user || !pages[page]) return;
   if (['operators','users','promotions','integrations'].includes(page) && state.user.role !== 'admin') page = 'dashboard';
   const previousPage = state.page;
+  if (state.confirm && (!state.confirm.busy || page !== previousPage)) { state.confirm = null; $('#confirm-dialog').close(); }
   if (page !== previousPage && state.editor?.kind === 'reschedule') { closeEditor(true); state.editor = null; }
   const oldFilters = preserveFilters ? (previousPage === page && $('#filters') ? Object.fromEntries(new FormData($('#filters'))) : state.filters[page] || {}) : {};
   try { if (['dashboard','audit','bookings'].includes(page)) validateRange(oldFilters); if (page === 'trips') validateTripFilters(oldFilters); } catch (error) { return toast(error.message,true); }
@@ -640,17 +642,19 @@ function closeEditor(force = false) {
   state.editor = null;
 }
 async function confirmAction(title, message, callback, buttonText = 'Xác nhận') {
-  const current = {busy:false,sessionId:state.sessionId}; state.confirm = current;
+  const current = {busy:false,sessionId:state.sessionId,loadId:state.loadId,route:location.hash}; state.confirm = current;
   $('#confirm-title').textContent = title;
   $('#confirm-message').textContent = message;
   $('#confirm-submit').textContent = buttonText;
+  $('#confirm-submit').disabled = false;
+  $$('[data-close-confirm]').forEach(close => close.disabled = false);
   $('#confirm-submit').onclick = async () => {
-    if (state.confirm !== current || current.busy || current.sessionId !== state.sessionId) return;
+    if (state.confirm !== current || current.busy || current.sessionId !== state.sessionId || current.loadId !== state.loadId || current.route !== location.hash) return;
     const button = $('#confirm-submit');
     current.busy = true; button.disabled = true;
     $$('[data-close-confirm]').forEach(close => close.disabled = true);
-    try { await callback(); if (state.confirm === current) $('#confirm-dialog').close(); } catch (error) { if (current.sessionId === state.sessionId) toast(error.message,true); }
-    finally { if (state.confirm === current) current.busy = false; button.disabled = false; $$('[data-close-confirm]').forEach(close => close.disabled = false); }
+    try { await callback(); if (state.confirm === current) $('#confirm-dialog').close(); } catch (error) { if (current.sessionId === state.sessionId && current.loadId === state.loadId && current.route === location.hash) toast(error.message,true); }
+    finally { if (state.confirm === current) { current.busy = false; button.disabled = false; $$('[data-close-confirm]').forEach(close => close.disabled = false); } }
   };
   $('#confirm-dialog').showModal();
 }
@@ -806,10 +810,12 @@ $$('[data-close-manifest]').forEach(button => button.addEventListener('click',()
 $('#manifest-dialog').addEventListener('close',() => { if (!$('#manifest-dialog').open) state.manifest = null; });
 document.addEventListener('ticket4t:session-expired',() => showLogin('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'));
 document.addEventListener('ticket4t:counter-booked',async event => {
-  if (!state.user || !event.detail?.code) return;
-  toast(`Đã tạo vé ${event.detail.code}. Chưa ghi nhận thu tiền.`);
-  await navigate('bookings');
-  if (state.user) openBookingDetail(event.detail);
+  const {booking,actor,replayed}=event.detail||{},user=state.user,sessionId=state.sessionId;
+  if (!user || !booking?.code || !actor || ['id','role','operatorId'].some(key=>(actor[key]??null)!==(user[key]??null))) return;
+  toast(replayed ? `Đã nhận trạng thái hiện tại của vé ${booking.code}.` : `Đã tạo vé ${booking.code}. Chưa ghi nhận thu tiền.`);
+  const navigation=navigate('bookings'),loadId=state.loadId;
+  await navigation;
+  if (sessionId===state.sessionId && user===state.user && loadId===state.loadId && state.page==='bookings' && location.hash==='#bookings' && !state.editor) openBookingDetail(booking);
 });
 document.addEventListener('click', async event => {
   const navigation = event.target.closest('[data-page]');
@@ -871,7 +877,17 @@ document.addEventListener('click', async event => {
   }
   if (action === 'delete-trip' && trip) return confirmAction('Ngừng mở bán chuyến xe?',`Chuyến ${trip.fromName || trip.from} → ${trip.toName || trip.to}, ${formatDate(trip.date)} lúc ${trip.departureTime}. Chuyến này sẽ ngừng nhận đặt vé mới. Vé hiện có được giữ nguyên; cần liên hệ khách nếu lịch chạy thay đổi.`,async () => { await api(`/admin/trips/${encodeURIComponent(id)}`,{method:'DELETE',body:{}}); toast('Chuyến xe đã ngừng mở bán.'); await navigate('trips',true); },'Ngừng mở bán');
   if (action === 'delete-operator' && operator) return confirmAction('Ngừng hoạt động nhà xe?',`Tạm dừng ${operator.name}. Chuyến thuộc nhà xe sẽ ngừng nhận vé mới; lịch sử và vé hiện có vẫn được giữ để xử lý với khách hàng.`,async () => { await api(`/admin/operators/${encodeURIComponent(id)}`,{method:'DELETE',body:{}}); toast('Nhà xe đã ngừng hoạt động.'); await navigate('operators'); },'Ngừng hoạt động');
-  if (action === 'cancel-booking' && booking) return confirmAction('Hủy đơn đặt vé?',`Hủy đơn ${booking.code} của ${booking.fullName}. Ghế được giải phóng. Nếu đã thu tiền, hệ thống chuyển sang chờ hoàn tiền để đối soát; thao tác này không tự chuyển tiền hoàn cho khách.`,async () => { await api(`/admin/bookings/${encodeURIComponent(id)}`,{method:'PATCH',body:{status:'cancelled'}}); toast('Đã xử lý hủy đơn vé.'); await navigate('bookings',true); },'Hủy vé');
+  if (action === 'cancel-booking' && booking) {
+    const sessionId=state.sessionId,loadId=state.loadId,route=location.hash;
+    const active=()=>sessionId===state.sessionId&&loadId===state.loadId&&route===location.hash;
+    return confirmAction('Hủy đơn đặt vé?',`Hủy ${booking.code} của ${booking.fullName} · ${formatDate(booking.trip?.date)} ${booking.trip?.departureTime} · Ghế ${(booking.seats||[]).join(', ')} · ${money(booking.total)} · ${paymentLabel(booking.paymentStatus)}. Ghế được giải phóng; tiền đã thu chuyển sang chờ hoàn, không tự chuyển tiền.`,async () => {
+      if(!await verifyStaffIdentity(sessionId)||!active())return;
+      try { await api(`/admin/bookings/${encodeURIComponent(id)}`,{method:'PATCH',body:{status:'cancelled',...(booking.rescheduleVersion?{expectedSourceVersion:booking.rescheduleVersion}:{})}}); }
+      catch(error){if(!active())return;if(error.code==='BOOKING_CHANGED'){toast('Vé đã thay đổi. Danh sách đã được tải lại; kiểm tra hành trình và thanh toán rồi xác nhận lại nếu vẫn muốn hủy.',true);await navigate('bookings',true);return;}throw error;}
+      if(!active()||!await verifyStaffIdentity(sessionId)||!active())return;
+      toast('Đã xử lý hủy đơn vé.'); await navigate('bookings',true);
+    },'Hủy vé');
+  }
   if (action === 'preview-import') return previewImport();
   if (action === 'download-json') return download('lich-trinh-mau.json',JSON.stringify([sampleTrip()],null,2));
   if (action === 'download-csv') return download('lich-trinh-mau.csv',toCSV([sampleTrip()]),'text/csv');

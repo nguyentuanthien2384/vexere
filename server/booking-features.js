@@ -120,17 +120,31 @@ function createBookingFeatures(ctx) {
       createdAt:row.created_at,status,activeTotal:active.reduce((sum,b) => sum+b.total,0),bookings};
   }
   async function checkout(req,inputs,{asOrder=false,staff=false}={}) {
-    const idempotency=staff ? null : checkoutIdempotency(req,fail);
     if(staff && req.body.paymentMethod===undefined)req.body={...req.body,paymentMethod:'cash'};
+    const idempotency=checkoutIdempotency(req,fail);
     const input=req.body,fullName=clean(input.fullName,100),email=clean(input.email,254).toLowerCase(),mobile=phone(input.phone);
-    const result=await db.transaction(async tx => {
+    const retryReplay=new Error('Counter replay moved while acquiring locks');
+    for(let attempt=0;attempt<3;attempt++)try{return await db.transaction(async tx => {
+      if (idempotency && db.dialect === 'postgres') await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',[idempotency.keyHash]);
+      if (staff) await staffActor(tx,req);
       if (idempotency) {
-        if (db.dialect === 'postgres') await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',[idempotency.keyHash]);
         const previous=await tx.get('SELECT request_hash,result FROM checkout_requests WHERE key_hash=?',[idempotency.keyHash]);
         if (previous) {
           if (previous.request_hash !== idempotency.requestHash) fail(409,'Mã yêu cầu đã được dùng cho thông tin đặt vé khác. Vui lòng dùng mã mới.','IDEMPOTENCY_CONFLICT');
           const saved=parse(previous.result),bookings=[];
           for (const code of saved.bookingCodes) bookings.push(await getBooking(code,tx));
+          if(staff) {
+            const booking=bookings[0];
+            if(!booking)fail(404,'Không tìm thấy đặt chỗ đã lưu.','NOT_FOUND');
+            scope(req,booking.trip.operatorId);
+            const lockedTrips=await lockTrips(tx,[booking.tripId]);
+            const row=await tx.get('SELECT trip_id FROM bookings WHERE code=?'+lock,[booking.code]);
+            if(!row)fail(404,'Không tìm thấy đặt chỗ đã lưu.','NOT_FOUND');
+            if(row.trip_id!==booking.tripId)throw retryReplay;
+            const current=await getBooking(booking.code,tx);
+            scope(req,current.trip.operatorId);scope(req,lockedTrips.get(current.tripId).operator_id);
+            return {bookings:[current],order:null,replayed:true};
+          }
           const pending=bookings.filter(b=>b.status === 'pending_payment');
           await lockTrips(tx,pending.map(b=>b.tripId));
           for (const tripId of [...new Set(pending.map(b=>b.tripId))].sort()) await expire(tx,tripId);
@@ -147,7 +161,6 @@ function createBookingFeatures(ctx) {
       const orderCode=asOrder ? newCode('T4O') : null,bookingCodes=inputs.map(() => newCode('T4T'));
       if (input.paymentMethod === 'vnpay' && !ctx.payments.configured(env)) fail(503,'VNPAY chưa được cấu hình. Vui lòng chọn thanh toán tại nhà xe.','PAYMENT_UNAVAILABLE');
       if (['momo','zalopay'].includes(input.paymentMethod) && !ctx.walletPayments?.configured(input.paymentMethod)) fail(503,'Ví điện tử chưa được cấu hình. Vui lòng chọn phương thức khác.','PAYMENT_UNAVAILABLE');
-      if(staff)await staffActor(tx,req);
       await lockTrips(tx,inputs.map(leg => clean(leg.tripId)));
       for (const tripId of [...new Set(inputs.map(leg => clean(leg.tripId)))].sort()) await expire(tx,tripId);
       const legs=[]; for (const leg of inputs) legs.push(await legInfo(tx,leg));
@@ -181,13 +194,20 @@ function createBookingFeatures(ctx) {
       }
       if (idempotency) await tx.run('INSERT INTO checkout_requests(key_hash,request_hash,result,created_at) VALUES(?,?,?,?)',[idempotency.keyHash,idempotency.requestHash,JSON.stringify({bookingCodes,orderCode}),createdAt]);
       return {bookings:bookingItems,order:asOrder ? await getOrder(orderCode,tx) : null};
-    });
-    return result;
+    });}catch(error){if(error!==retryReplay)throw error;}
+    fail(503,'Đặt chỗ đang được cập nhật. Vui lòng thử lại cùng yêu cầu.','COUNTER_RETRY');
   }
   async function notify(bookingOrBookings,order=null) {
     const bookings=Array.isArray(bookingOrBookings) ? bookingOrBookings : [bookingOrBookings],booking=bookings[0];
     const itinerary=bookings.map((item,index)=>(bookings.length>1 ? '\nChiều '+(index+1)+'\n' : '')+'Mã đặt chỗ: '+item.code+'\n'+item.trip.fromName+' → '+item.trip.toName+'\n'+item.trip.date+' '+item.trip.departureTime+'\nGhế: '+item.seats.join(', ')+'\nĐiểm đón: '+item.pickup+'\nĐiểm trả: '+item.dropoff+'\nTổng: '+item.total+' VND').join('\n');
-    return ctx.mail({to:booking.email,subject:'Đặt chỗ Ticket4T '+(order?.code || booking.code),text:'Xin chào '+booking.fullName+'\n'+(order ? 'Mã đơn khứ hồi: '+order.code+'\n' : '')+itinerary+(order ? '\nTổng đơn: '+order.total+' VND' : '')+'\nTrạng thái: chưa thanh toán.\n'+(bookings.some(item=>item.source === 'demo') ? 'ĐÂY LÀ DỮ LIỆU MẪU; không phải vé nhà xe thật.' : 'Vui lòng xác nhận thông tin với nhà xe.')});
+    try {
+      return await ctx.mail({to:booking.email,subject:'Đặt chỗ Ticket4T '+(order?.code || booking.code),text:'Xin chào '+booking.fullName+'\n'+(order ? 'Mã đơn khứ hồi: '+order.code+'\n' : '')+itinerary+(order ? '\nTổng đơn: '+order.total+' VND' : '')+'\nTrạng thái: chưa thanh toán.\n'+(bookings.some(item=>item.source === 'demo') ? 'ĐÂY LÀ DỮ LIỆU MẪU; không phải vé nhà xe thật.' : 'Vui lòng xác nhận thông tin với nhà xe.')});
+    } catch {
+      // Checkout has committed. Keep its recovery details available even when
+      // recording or sending its notification fails; never resend on replay.
+      console.error('Booking notification failed:','EMAIL_NOTIFICATION_FAILED');
+      return {delivered:false};
+    }
   }
   function installPublic(router) {
     router.post('/holds/session',endpoint(async (req,res)=>{owner(req);res.json({ready:true});}));

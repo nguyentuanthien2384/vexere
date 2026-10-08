@@ -26,6 +26,10 @@ Khách có 5 phút giữ ghế trước khi tạo vé; mỗi phiên có tối đ
 - Sau khi đã hoàn đủ tiền thực tế, nhân viên nhập phiếu hoàn/mã chuyển khoản trong quản trị. Số tiền phải khớp với vé; mã chứng từ chỉ được ghi một lần và có nhật ký người xử lý.
 - Đặt chỗ khách tự hủy cần trước giờ khởi hành ít nhất hai giờ. Quản trị có quyền xử lý vận hành và nhật ký ghi nhận người thao tác.
 
+Trước khi hủy, kiểm tra đúng mã vé, ngày giờ, ghế và trạng thái thu tiền trong xác nhận. Nếu vé vừa đổi chuyến, xác nhận hoặc thu tiền, hệ thống tải lại thông tin và yêu cầu bạn xác nhận mới; không dùng xác nhận cũ để hủy vé đã thay đổi. Mất phản hồi khi hủy cần tra cứu trạng thái hiện tại trước khi thao tác tiếp.
+
+Tại quầy, kiểm tra hành khách, chuyến, ghế, điểm đón/trả và tổng tiền rồi đánh dấu đồng ý trước khi tạo đặt chỗ. Nếu kết nối gián đoạn, dùng thông báo “Cần kiểm tra yêu cầu bán vé tại quầy” để lấy lại kết quả cùng yêu cầu; không tạo vé khác thay thế khi chưa rõ kết quả. Cùng tài khoản có thể khôi phục sau reload trong 24 giờ. Kết quả có thể là vé đã thu tiền, hủy hoặc đổi tiếp; xử lý theo trạng thái hiện tại. Thay giá/lịch/điểm/ghế cần kiểm tra và đồng ý mới. Đăng xuất hoặc đổi danh tính/phạm vi bỏ dữ liệu khôi phục; khi đó tra cứu danh sách vé và nhật ký để tiếp tục đối soát.
+
 Tài liệu tích hợp: [VNPAY PAY](https://sandbox.vnpayment.vn/apis/docs/thanh-toan-pay/pay.html).
 
 ## Khứ hồi, ưu đãi và đổi vé
@@ -48,6 +52,8 @@ Trong phát triển, khi chưa cấu hình SMTP, email được ghi vào `data/e
 
 Production không dùng hộp thư phát triển. Nếu chưa có SMTP, các chức năng đăng ký/khôi phục qua email không mở; quản trị vẫn có thể vận hành kho vé đã nhập và khách có thể đặt chỗ bằng thông tin liên hệ.
 
+Lỗi ghi email thông báo sau khi đặt chỗ đã lưu không làm mất mã vé/đơn; máy chủ ghi mã lỗi `EMAIL_NOTIFICATION_FAILED`. Cần đối chiếu vé và trạng thái gửi thư riêng. Không tự gửi lại mọi bản ghi `pending`: trạng thái này có thể bao gồm email đã gửi nhưng cập nhật outbox thất bại. Chưa có cơ chế retry outbox hoặc chứng nhận email đã tới hộp thư thực tế.
+
 ## Dữ liệu và sao lưu
 
 - Phát triển: SQLite nằm trong `data/ticket4t.sqlite`; vé, ghế, tài khoản và phiên đăng nhập được giữ qua lần khởi động sau.
@@ -63,6 +69,20 @@ Chạy Node.js 24 LTS dưới một trình quản lý tiến trình hoặc Docke
 Health check: `GET /api/health`. Phiên đăng nhập lưu trong database; cookie có `HttpOnly`, `SameSite=Lax` và `Secure` ở production. Yêu cầu ghi dữ liệu từ website khác bị từ chối; API có giới hạn tần suất.
 
 Docker Compose sử dụng PostgreSQL 16 và health check. Điền `POSTGRES_PASSWORD` và `SESSION_SECRET` trước khi chạy. Cấu hình production dùng tên miền HTTPS và kho dữ liệu riêng, không sử dụng volume kiểm thử đã có tài khoản mẫu.
+
+Compose chuyển các biến `MOMO_*`, `ZALOPAY_*`, `OPERATOR_FEED_*` và SMTP được khai báo trong `.env.example` vào container ứng dụng, cùng alias `SMTP_PASSWORD`. Cấu hình host chưa đủ nếu dùng bản Compose cũ không chuyển biến; cập nhật tệp Compose và khởi tạo lại container theo quy trình triển khai của bạn. Kiểm tra cú pháp `docker compose config --quiet` không xác minh kết nối merchant/SMTP/nhà xe hay database đang chạy.
+
+## Hạng mục còn cần phát triển và kiểm chứng
+
+Các luồng tìm/lọc, giữ ghế, checkout, đổi chuyến, quầy và hủy hiện đã có kiểm thử hồi quy; kết quả chi tiết ở [kiểm định](validation.md). Những phần còn lại được ưu tiên như sau:
+
+1. **Tài khoản khách:** thêm trang sửa hồ sơ/đổi mật khẩu, giao diện gửi lại email xác minh và phân trang/lọc lịch sử vé. Backend đã có endpoint gửi lại xác minh; lịch sử hiện lấy tối đa 100 vé gần nhất.
+2. **Khôi phục chứng từ:** bổ sung lấy lại kết quả ghi phiếu thu/hoàn tiền khi mất phản hồi. Hiện sổ tiền chống ghi trùng, nhưng thử lại có thể báo xung đột; nhân viên cần tra cứu vé và chứng từ trước khi thao tác tiếp.
+3. **Vận hành nền:** theo dõi gửi email/job hết hạn, giới hạn thời gian SMTP và thiết kế retry outbox có trạng thái chưa rõ kết quả. Bổ sung diễn tập khôi phục backup và kiểm thử staging nhiều tiến trình; không coi kiểm thử khóa trong fixture là bằng chứng tải thực.
+4. **Tích hợp đối tác thực:** truy vấn/đối soát/hoàn tiền merchant, giữ–đặt–hủy ghế đa kênh nhà xe, SMTP/mailbox và webhook public. Cần hợp đồng API, tài khoản sandbox, thông số môi trường và khóa bí mật cấu hình riêng để phát triển/kiểm chứng đúng dịch vụ được cấp. Không suy ra kết nối này đã đạt từ mock hoặc Compose config.
+5. **Phát hành:** chạy workflow GitHub, PostgreSQL16/container và staging HTTPS với cấu hình vận hành; xác nhận lịch/kho ghế được cấp trước khi mở bán. Kiểm tra accessibility toàn bộ và tải theo quy mô dự kiến còn là công việc riêng.
+
+Ba nhóm đầu là công việc phát triển nội bộ còn lại; nhóm đối tác phụ thuộc môi trường được cấp. Dự án chưa được tuyên bố hoàn thiện toàn bộ nghiệp vụ hoặc sẵn sàng mở bán chỉ dựa trên kết quả local.
 
 ## Nguồn của dự án
 

@@ -366,11 +366,15 @@ async function createApi(options={}) {
       if (staff) await staffActor(tx,req);
       const tripRow=await tx.get('SELECT * FROM trips WHERE id=?'+lock,[initial.trip_id]);
       const row=await tx.get('SELECT * FROM bookings WHERE code=?'+lock,[code]);
-      if (row.trip_id !== initial.trip_id) fail(409,'Vé vừa được đổi chuyến. Vui lòng tải lại.','CONFLICT');
+      if (row.trip_id !== initial.trip_id) fail(409,'Vé vừa được đổi chuyến. Vui lòng tải lại.',req.body.expectedSourceVersion===undefined ? 'CONFLICT' : 'BOOKING_CHANGED');
       await expire(tx,initial.trip_id);
       const booking=await getBooking(code,tx);
       if (staff) scope(req,booking.trip?.operatorId || tripRow.operator_id); else if (!bookingOwner(req,booking)) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
       if (['cancelled','expired','refund_pending'].includes(booking.status)) return booking;
+      if(req.body.expectedSourceVersion!==undefined) {
+        if(typeof req.body.expectedSourceVersion!=='string' || !/^[a-f0-9]{64}$/.test(req.body.expectedSourceVersion))fail(400,'Phiên bản đặt chỗ không hợp lệ.','VALIDATION_ERROR');
+        if(req.body.expectedSourceVersion!==booking.rescheduleVersion)fail(409,'Đặt chỗ đã thay đổi. Vui lòng kiểm tra và xác nhận lại trước khi hủy.','BOOKING_CHANGED');
+      }
       if (!staff && new Date(tripRow.departure_at).getTime()<=Date.now()+2*3600000) fail(409,'Vé chỉ được hủy trước giờ khởi hành ít nhất 2 giờ.','CANCELLATION_CLOSED');
       const paid=row.payment_status === 'paid';
       await tx.run('UPDATE bookings SET status=?,payment_status=?,expires_at=NULL WHERE code=?',[paid ? 'refund_pending' : 'cancelled',paid ? 'refund_pending' : 'pending',code]);
@@ -542,7 +546,7 @@ async function createApi(options={}) {
   router.get('/admin/stats',endpoint(async (req,res) => {
     await refreshExpired();res.json(await adminStats({db,user:req.user,query:req.query,fail,paymentMethods,dataMode:await mode()}));
   }));
-  router.post('/admin/bookings',endpoint(async(req,res)=>{const result=await features.checkout(req,[req.body],{staff:true});res.status(201).json({booking:result.bookings[0]});}));
+  router.post('/admin/bookings',endpoint(async(req,res)=>{const result=await features.checkout(req,[req.body],{staff:true});if(result.replayed)res.set('Idempotency-Replayed','true');res.status(result.replayed ? 200 : 201).json({booking:result.bookings[0],...(result.replayed ? {replayed:true} : {})});}));
   router.get('/admin/trips',endpoint(async (req,res) => res.json(await tripSearch(req.query,req,true))));
   router.get('/admin/operators',endpoint(async (req,res) => {
     const rows=await db.all('SELECT * FROM operators'+(req.user.role === 'operator' ? ' WHERE id=?' : '')+' ORDER BY name',req.user.role === 'operator' ? [req.user.operatorId || ''] : []);

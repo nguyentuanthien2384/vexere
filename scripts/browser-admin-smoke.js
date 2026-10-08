@@ -363,6 +363,7 @@ const { addDays } = require('../server/catalog');
         await json(await competitor.request.post(base + '/api/holds', { data: { tripId: trips[0].id, seats: ['A02'] } }), 201);
         await page.locator('#counter-refresh').click();
         await page.locator('.counter-seat[data-seat="A02"]:disabled').waitFor();
+        await page.waitForFunction(() => document.getElementById('counter-selected')?.textContent === 'A03');
         assert.equal(await page.locator('#counter-selected').innerText(), 'A03', 'Refreshing removes seats held by a competing guest');
         assert.match(await page.locator('#counter-error').innerText(), /khách khác/);
         await page.fill('#counter-form [name="fullName"]', 'Hành khách tại quầy QA'); await page.fill('#counter-form [name="phone"]', '0907777888'); await page.fill('#counter-form [name="email"]', 'qa-counter@example.test');
@@ -375,7 +376,7 @@ const { addDays } = require('../server/catalog');
         await page.route('**/api/admin/bookings', async route => { if (route.request().method() !== 'POST') return route.continue(); started(); await gate; await route.continue(); });
         const saved = page.waitForResponse(response => response.url().endsWith('/api/admin/bookings') && response.request().method() === 'POST');
         try {
-          await page.locator('#counter-submit').click(); await intercepted;
+          await page.check('#counter-form [name="counterConfirmed"]'); await page.locator('#counter-submit').click(); await intercepted;
           assert.ok(await page.locator('#counter-submit').isDisabled());
           await page.keyboard.press('Escape'); assert.ok(await page.locator('#counter-dialog').isVisible(), 'An in-flight sale stays visible until server response');
         } finally { release(); }
@@ -406,7 +407,7 @@ const { addDays } = require('../server/catalog');
       try {
         await json(await competitor.request.post(base + '/api/holds', { data: { tripId: trips[2].id, seats: ['A02'] } }), 201);
         const rejected = page.waitForResponse(response => response.url().endsWith('/api/admin/bookings') && response.request().method() === 'POST');
-        await page.locator('#counter-submit').click(); assert.equal((await rejected).status(), 409);
+        await page.check('#counter-form [name="counterConfirmed"]'); await page.locator('#counter-submit').click(); assert.equal((await rejected).status(), 409);
         await page.locator('.counter-seat[data-seat="A02"]:disabled').waitFor();
         assert.equal(await page.locator('#counter-selected').innerText(), 'Chưa chọn ghế'); assert.ok(await page.locator('#counter-submit').isDisabled());
         assert.match(await page.locator('#counter-error').innerText(), /ghế|Ghế/);
@@ -431,8 +432,8 @@ const { addDays } = require('../server/catalog');
       await page.locator('.counter-seat[data-seat="A01"]').click();
       await page.fill('#counter-form [name="fullName"]', 'Khách cần xóa khỏi phiên'); await page.fill('#counter-form [name="phone"]', '0908888999'); await page.fill('#counter-form [name="email"]', 'qa-revoked-passenger@example.test');
       await json(await fixtures.request.patch(base + '/api/admin/users/' + user.id, { data: { active: false } }));
-      const rejected = page.waitForResponse(response => response.url().endsWith('/api/admin/bookings') && response.request().method() === 'POST');
-      await page.locator('#counter-submit').click(); assert.equal((await rejected).status(), 403);
+      const identity = page.waitForResponse(response => response.url().endsWith('/api/auth/me'));
+      await page.check('#counter-form [name="counterConfirmed"]'); await page.locator('#counter-submit').click(); assert.equal((await json(await identity)).user,null);
       await page.locator('#login-screen').waitFor({ state: 'visible' }); await page.locator('#counter-dialog').waitFor({ state: 'hidden' });
       assert.ok(await page.locator('#portal').isHidden());
       assert.ok(await page.evaluate(() => ['fullName', 'phone', 'email'].every(name => !document.querySelector(`#counter-form [name="${name}"]`)?.value)), 'A revoked staff session clears passenger inputs');

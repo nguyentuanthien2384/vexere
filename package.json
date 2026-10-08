@@ -20,6 +20,8 @@
     "test:ui:checkout": "node scripts/browser-checkout-smoke.js",
     "test:ui:reschedule": "node scripts/browser-reschedule-smoke.js",
     "test:ui:admin-reschedule": "node scripts/browser-admin-reschedule-smoke.js",
+    "test:ui:counter": "node scripts/browser-counter-recovery-smoke.js",
+    "test:ui:cancellation": "node scripts/browser-cancellation-smoke.js",
     "test:ui": "node scripts/browser-smoke.js",
     "test:ui:advanced": "node scripts/browser-advanced-smoke.js",
     "test:ui:regression": "node scripts/browser-regression-smoke.js",

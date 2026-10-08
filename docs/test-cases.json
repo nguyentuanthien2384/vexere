@@ -230,9 +230,9 @@
       "id": "TC-POSTGRES-01", "feature": "PostgreSQL thực và khóa kho vé", "priority": "P0",
       "preconditions": "TEST_DATABASE_URL trỏ database riêng tên có test; runner tạo schema ngẫu nhiên cho từng file.",
       "input": "Commit/rollback, 8 unique/seat contenders, reservation/hold/coupon/receipt và session.",
-      "steps": ["Chạy npm run test:postgres qua tám bộ đã opt in, gồm search-contracts, hold-recovery, reschedule-recovery và admin-reschedule-contracts.", "Kiểm tra reports từng file và schema từng ca search/hold-recovery/hai bộ đổi chuyến đã dọn."],
+      "steps": ["Chạy npm run test:postgres qua mười một bộ đã opt in, gồm các hợp đồng search/hold/đổi chuyến/quầy/hủy/thông báo.", "Kiểm tra reports từng file và schema từng ca của các bộ hợp đồng đã dọn."],
       "expected": "Không bán/thu/tiêu quota trùng; rollback và pool còn dùng được; session đúng; schema test bị xóa sau mỗi bộ, không dùng public schema.",
-      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "tests/search-contracts.test.js", "ids": ["IT-SEARCH-"]}, {"file": "tests/hold-recovery.test.js", "ids": ["IT-HOLD-REC-"]}, {"file": "tests/reschedule-recovery.test.js"}, {"file": "tests/admin-reschedule-contracts.test.js", "ids": ["IT-ADMIN-RSCH-"]}, {"file": "tests/postgres/database.test.js", "ids": ["IT-PG-"]}]
+      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "tests/search-contracts.test.js", "ids": ["IT-SEARCH-"]}, {"file": "tests/hold-recovery.test.js", "ids": ["IT-HOLD-REC-"]}, {"file": "tests/reschedule-recovery.test.js"}, {"file": "tests/admin-reschedule-contracts.test.js", "ids": ["IT-ADMIN-RSCH-"]}, {"file": "tests/counter-recovery.test.js", "ids": ["IT-COUNTER-"]}, {"file": "tests/cancellation-consent.test.js", "ids": ["IT-CANCEL-"]}, {"file": "tests/notification-recovery.test.js", "ids": ["IT-NOTIFY-"]}, {"file": "tests/postgres/database.test.js", "ids": ["IT-PG-"]}]
     },
     {
       "id": "TC-WEB-01", "feature": "Ranh giới web, production và dữ liệu mẫu", "priority": "P0",
@@ -246,9 +246,9 @@
       "id": "TC-UI-01", "feature": "Điều hướng khách, responsive và phản hồi trễ", "priority": "P1",
       "preconditions": "Chrome headless với kho test riêng, viewport desktop/mobile.",
       "input": "Storage sai cấu trúc, đổi route/date/coupon, keyboard Escape, menu/filter mobile.",
-      "steps": ["Chạy toàn bộ mười browser suites.", "Kiểm tra search/checkout/lookup/reschedule/admin, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
+      "steps": ["Chạy toàn bộ mười hai browser suites.", "Kiểm tra search/checkout/lookup/reschedule/admin/counter/cancellation, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
       "expected": "Luồng chính chạy được, không blank screen/overflow; phản hồi trễ không đổi trạng thái mới; keyboard/modal hoạt động; screenshots lưu để xem thủ công, không phải visual baseline tự động.",
-      "automation": [{"file": "scripts/browser-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-admin-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-integrations-smoke.js"}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-"]}, {"file": "scripts/browser-checkout-smoke.js", "ids": ["UI-CHECK-"]}, {"file": "scripts/browser-reschedule-smoke.js", "ids": ["UI-RSCH-"]}, {"file": "scripts/browser-admin-reschedule-smoke.js", "ids": ["UI-ADMIN-RSCH-"]}]
+      "automation": [{"file": "scripts/browser-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-admin-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-integrations-smoke.js"}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-"]}, {"file": "scripts/browser-checkout-smoke.js", "ids": ["UI-CHECK-"]}, {"file": "scripts/browser-reschedule-smoke.js", "ids": ["UI-RSCH-"]}, {"file": "scripts/browser-admin-reschedule-smoke.js", "ids": ["UI-ADMIN-RSCH-"]}, {"file": "scripts/browser-counter-recovery-smoke.js", "ids": ["UI-COUNTER-"]}, {"file": "scripts/browser-cancellation-smoke.js", "ids": ["UI-CANCEL-"]}]
     },
     {
       "id": "TC-HOLD-02", "feature": "Giữ ghế theo điều kiện đã xem và khôi phục sau mất phản hồi", "priority": "P0",
@@ -305,6 +305,38 @@
       "steps": ["Xác nhận đổi, bỏ phản hồi sau commit rồi tải lại và kiểm tra nguyên body/path/key với đồng ý thủ công.", "Thay vé gốc/chuyến mới trước khi gửi; kiểm tra hiển thị điều kiện hiện tại và yêu cầu đồng ý mới.", "Gửi trùng và để phản hồi tới sau điều hướng, đổi hộp thoại hoặc đổi tài khoản.", "Tải cache sai cấu trúc hoặc của danh tính/phạm vi khác; kiểm tra không lộ thông tin và không gửi request sai.", "Thử lại sau vé đã hủy/đổi tiếp và kiểm tra form trong viewport mobile."],
       "expected": "Chỉ chuyển ghế và ghi lịch sử/audit một lần; khôi phục gửi đúng yêu cầu ban đầu, không tự đổi lựa chọn hoặc tự đồng ý. Lỗi thông tin cũ yêu cầu xem và xác nhận lại. Cache không hợp lệ bị loại; logout/mất quyền/đổi danh tính bỏ dữ liệu khách; phản hồi cũ không ghi vào hộp thoại hoặc tài khoản mới. Replay hiển thị trạng thái hiện tại; modal nằm trong khung mobile.",
       "automation": [{"file": "tests/unit/admin-reschedule-recovery.test.js", "ids": ["UT-ADMIN-RSCH-"]}, {"file": "scripts/browser-admin-reschedule-smoke.js", "ids": ["UI-ADMIN-RSCH-"]}]
+    },
+    {
+      "id": "TC-COUNTER-RECOVERY-01", "feature": "Khôi phục API bán tại quầy và xác nhận giá", "priority": "P0",
+      "preconditions": "Fixture managed riêng, tài khoản nhân viên đúng phạm vi và kho còn chỗ; có thể chạy SQLite hoặc PostgreSQL test.",
+      "input": "Idempotency-Key, expectedBookingVersion, expectedTotal; yêu cầu đồng thời, đổi body/path, đổi quyền, đổi chuyến và trạng thái thu/hủy/hoàn.",
+      "steps": ["Gửi nhiều yêu cầu cùng body/key và kiểm tra một vé, một lượt ưu đãi, một audit.", "Thử lại sau thay đổi trạng thái, đổi chuyến hoặc đóng chuyến cũ.", "Đổi giá/điều kiện và xác nhận mới; kiểm tra rollback khóa khi từ chối.", "Thay phạm vi/thu hồi quyền trong lúc chờ và thử giá trị khóa từ tài khoản khác."],
+      "expected": "Lần đầu 201, replay 200 kèm Idempotency-Replayed; trả vé hiện tại sau kiểm quyền/phạm vi thật. Không nhân đôi ghế/quota/audit, không gửi email từ quầy. Client không header vẫn tương thích; tranh chấp replay thử tối đa ba giao dịch rồi 503 COUNTER_RETRY.",
+      "automation": [{"file": "tests/counter-recovery.test.js", "ids": ["IT-COUNTER-"]}]
+    },
+    {
+      "id": "TC-COUNTER-RECOVERY-02", "feature": "Giao diện quầy xác nhận và phục hồi yêu cầu", "priority": "P0",
+      "preconditions": "Chrome headless, kho loopback riêng, network gates điều khiển phản hồi.",
+      "input": "Mất phản hồi đã commit, JSON null, reload, double submit, thay dữ liệu, cache lỗi, logout/đổi tài khoản, giá/điểm/ghế đổi, mobile390px.",
+      "steps": ["Lưu request và khôi phục sau reload bằng cùng body/key với đồng ý thủ công.", "Sửa lựa chọn bản khôi phục, kiểm tra bị chặn cho đến khi khôi phục đúng.", "Thay giá/ghế, kiểm tra thông tin hiện tại và đồng ý mới trước khi gửi.", "Để phản hồi đến sau đổi editor/route/tài khoản hoặc danh sách đang tải.", "Thử cache lỗi/hết hạn và đăng xuất khi kết quả chưa rõ."],
+      "expected": "Đúng một vé/audit; yêu cầu bất biến có thời hạn 24 giờ và đúng tài khoản/quyền/phạm vi. Không tự gửi hoặc tự đồng ý. Dữ liệu riêng được xóa khi logout/đổi danh tính; phản hồi cũ không dựng chi tiết trên editor mới. Kết quả replay dùng trạng thái hiện tại.",
+      "automation": [{"file": "tests/unit/counter-recovery.test.js", "ids": ["UT-COUNTER-"]}, {"file": "scripts/browser-counter-recovery-smoke.js", "ids": ["UI-COUNTER-"]}]
+    },
+    {
+      "id": "TC-CANCEL-CONSENT-01", "feature": "Hủy đúng phiên bản vé đã xác nhận", "priority": "P0",
+      "preconditions": "Vé khách hoặc nhân viên có quyền; có thể đổi chuyến/thu tiền trước hoặc trong lúc request chờ khóa.",
+      "input": "expectedSourceVersion đúng/cũ/sai, A→B→A, phiếu thu/xác nhận mới, terminal replay, phiên thay đổi và phản hồi muộn.",
+      "steps": ["Xem vé, thay nguồn hoặc thu tiền rồi gửi xác nhận cũ.", "Kiểm tra nguồn hiện tại và xác nhận thủ công mới, đúng điều kiện thu/hủy/hoàn.", "Điều hướng hoặc đổi tài khoản khi modal/POST/lookup đang chờ.", "Gửi trùng xác nhận và mô phỏng mất phản hồi sau commit."],
+      "expected": "Phiên bản cũ trả 409 BOOKING_CHANGED trước khi tác động ghế; terminal retry không lặp audit. Client cũ tương thích. Modal cũ đóng/bị vô hiệu khi điều hướng; refresh yêu cầu đồng ý mới; không có phản hồi hay dữ liệu khách cũ lọt sang màn hình/tài khoản mới.",
+      "automation": [{"file": "tests/cancellation-consent.test.js", "ids": ["IT-CANCEL-"]}, {"file": "scripts/browser-cancellation-smoke.js", "ids": ["UI-CANCEL-"]}]
+    },
+    {
+      "id": "TC-NOTIFY-RECOVERY-01", "feature": "Lỗi thông báo sau commit không che mã đặt chỗ", "priority": "P0",
+      "preconditions": "Fixture riêng, lỗi giả lập INSERT outbox hoặc append file phát triển; không gọi SMTP thật.",
+      "input": "Đặt vé đơn/khứ hồi có ưu đãi và cùng key sau lỗi thông báo.",
+      "steps": ["Gây lỗi outbox DB/file sau giao dịch đặt vé đã commit.", "Kiểm tra HTTP 201 và mã vé/đơn hợp lệ.", "Replay cùng request/key và kiểm tra không chạy thông báo lần nữa.", "Kiểm tra số vé, ghế, quota, order, key và log."],
+      "expected": "Đơn đã tạo vẫn trả kết quả thành công, không nhân đôi vé/ghế/quota; log mã cố định không chứa PII/token/provider details. Không thay đổi hành vi gửi token xác minh/khôi phục tài khoản.",
+      "automation": [{"file": "tests/notification-recovery.test.js", "ids": ["IT-NOTIFY-"]}]
     },
     {
       "id": "TC-TOOLING-01", "feature": "Test runner, báo cáo và teardown", "priority": "P1",
