@@ -80,6 +80,25 @@ async function createApp(options = {}) {
   }));
   app.use('/api', api.router);
   app.use('/api', (req, res) => res.status(404).json({ error: 'Không tìm thấy API.', code: 'NOT_FOUND' }));
+  // Only these browser bundles and their licenses are public. Reject the whole
+  // vendor prefix before static files and the admin SPA can handle a miss.
+  const vendorAssets = new Map([
+    ['/admin/vendor/chart.umd.js', ['chart.js/dist/chart.umd.js', 'application/javascript']],
+    ['/admin/vendor/papaparse.min.js', ['papaparse/papaparse.min.js', 'application/javascript']],
+    ['/admin/vendor/chart.LICENSE.md', ['chart.js/LICENSE.md', 'text/plain']],
+    ['/admin/vendor/papaparse.LICENSE', ['papaparse/LICENSE', 'text/plain']],
+  ]);
+  app.use((req, res, next) => {
+    let decodedPath = req.path;
+    try { decodedPath = decodeURIComponent(decodedPath); } catch {}
+    if (!/^\/admin\/vendor(?:\/|$)/i.test(req.path) && !/^\/admin\/vendor(?:\/|$)/i.test(decodedPath)) return next();
+    const asset = vendorAssets.get(req.path);
+    if (!asset || !['GET', 'HEAD'].includes(req.method)) return res.status(404).type('text').send('Không tìm thấy thư viện.');
+    res.type(asset[1]);
+    res.sendFile(path.join(__dirname, 'node_modules', asset[0]), { maxAge: production ? '1d' : 0 }, error => {
+      if (error) next(error);
+    });
+  });
   app.use(express.static(path.join(__dirname, 'public'), { index: false, dotfiles: 'deny', maxAge: production ? '1d' : 0 }));
   app.get(['/admin', '/admin/*', '/dashboard'], (req, res) => {
     res.set('Cache-Control', 'no-store'); res.sendFile(path.join(__dirname, 'public/admin/index.html'));

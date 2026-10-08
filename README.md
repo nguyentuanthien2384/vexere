@@ -50,11 +50,11 @@ Không cần sửa file `.env` cũ để xem bản kiểm thử. Nếu muốn c�
 
 ### Quản trị và đối tác
 
-- Tổng quan theo khoảng ngày Việt Nam: tiền đã thu, đã hoàn, thu ròng, chưa thu, đang chờ hoàn và tỷ lệ lấp đầy; biểu đồ thu tiền và thống kê theo ngày, nhà xe, tuyến, phương thức thanh toán.
+- Tổng quan theo khoảng ngày Việt Nam: tiền đã thu, đã hoàn, thu ròng, chưa thu, đang chờ hoàn và tỷ lệ lấp đầy. Chart.js hiển thị thu/hoàn/thu ròng theo ngày, trạng thái đơn, thu ròng theo thanh toán và 10 tuyến nhiều đơn nhất; có tooltip, nút ẩn/hiện chuỗi bằng bàn phím và bảng đối chiếu đầy đủ.
 - Bán vé tại quầy trên sơ đồ ghế theo tầng, chọn tối đa sáu ghế, kiểm tra tồn chỗ và giá trong giao dịch chung với đặt vé online. Thông tin người mua được tách khỏi tài khoản nhân viên; ghi phiếu thu riêng khi đã thu đủ tiền.
 - Bán tại quầy xác nhận lịch/điểm đón/giá đã xem, khôi phục cùng yêu cầu sau mất phản hồi hoặc reload và không tạo thêm vé. Hủy vé yêu cầu kiểm tra lại nếu vé vừa đổi chuyến hoặc thu tiền; phản hồi cũ không ghi vào màn hình/tài khoản mới.
 - Thêm/sửa/ngừng hoạt động nhà xe, tạo/sửa/ngừng mở bán/nhân bản chuyến.
-- Nhập CSV/JSON, xem trước, kiểm tra toàn bộ trước khi lưu và ghi nguồn lịch từ đối tác.
+- Nhập CSV/JSON, xem trước, kiểm tra toàn bộ trước khi lưu và ghi nguồn lịch từ đối tác. Papa Parse nhận CSV dấu phẩy, chấm phẩy hoặc tab, giữ mã dạng chuỗi; xuất mẫu UTF8 BOM/CRLF và trung hòa công thức bảng tính.
 - Tra cứu đặt chỗ theo ngày, nhà xe và trạng thái; xác nhận/hủy, ghi nhận phiếu thu hoặc hoàn đúng số tiền và mã chứng từ duy nhất.
 - Nhật ký vận hành có người thực hiện, thời gian, đối tượng và nội dung thay đổi; lọc theo ngày, nhà xe, thao tác và từ khóa, phân trang theo phạm vi được cấp.
 - Tạo/quản lý tài khoản khách và nhân viên nhà xe; quyền nhà xe chỉ truy cập dữ liệu thuộc nhà xe được giao. Thu hồi phiên khi đổi quyền hoặc khóa tài khoản; lịch sử vé và doanh thu giữ nhà xe đã bán sau khi chuyển chủ chuyến. Tài khoản quản trị cấp bằng cấu hình máy chủ.
@@ -109,6 +109,8 @@ npm run test:ui:reschedule
 npm run test:ui:admin-reschedule
 npm run test:ui:counter
 npm run test:ui:cancellation
+npm run test:ui:dashboard
+npm run test:ui:csv
 npm run pack:project
 ```
 
@@ -116,7 +118,7 @@ ZIP nằm ở `artifacts/Ticket4T-project.zip`, chứa mã nguồn, tài nguyên
 
 `test:ui` mở Chrome headless, chạy trên database tạm riêng và kiểm tra tìm chuyến → chọn ghế → đặt/tra cứu/hủy vé cùng các trang quản trị. Cần cài Chrome; với trình duyệt Playwright riêng, cài `npx playwright install chromium` và đặt `BROWSER_CHANNEL=chromium`. Ảnh kiểm thử được lưu vào `artifacts/screenshots/`.
 
-Đã tách unit test khỏi API/database test. `test:ci` kiểm tra cú pháp, danh mục ca và toàn bộ backend với ngưỡng coverage 95% dòng, 85% nhánh, 90% hàm; xuất JUnit/JSON/LCOV vào `artifacts/tests/coverage/`. CI GitHub có job Node24 Ubuntu/Windows, PostgreSQL16 và Chromium. Xem [hướng dẫn kiểm thử](docs/testing.md) và [43 tình huống theo chức năng](docs/test-cases.json) để xem tiền điều kiện, bước và kết quả mong đợi; kết quả từng ca được sinh trong báo cáo JSON.
+Đã tách unit test khỏi API/database test. `test:ci` kiểm tra cú pháp, danh mục ca và toàn bộ backend với ngưỡng coverage 95% dòng, 85% nhánh, 90% hàm; xuất JUnit/JSON/LCOV vào `artifacts/tests/coverage/`. CI GitHub có job Node24 Ubuntu/Windows, PostgreSQL16 và Chromium. Xem [hướng dẫn kiểm thử](docs/testing.md) và [46 tình huống theo chức năng](docs/test-cases.json) để xem tiền điều kiện, bước và kết quả mong đợi; kết quả từng ca được sinh trong báo cáo JSON.
 
 Xem [tình huống và dữ liệu test](docs/test-scenarios.md) để thử mã ưu đãi, vé khứ hồi, các trạng thái thanh toán, chuyến hết ghế và tài khoản nhà xe. Dữ liệu tình huống được thêm một lần, giữ nguyên vé bạn đã tạo. `npm run seed` bổ sung kho chuyến, không xóa dữ liệu. Lộ trình và chứng từ mẫu đều có nhãn minh họa.
 

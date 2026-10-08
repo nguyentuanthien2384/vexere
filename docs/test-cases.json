@@ -246,7 +246,7 @@
       "id": "TC-UI-01", "feature": "Điều hướng khách, responsive và phản hồi trễ", "priority": "P1",
       "preconditions": "Chrome headless với kho test riêng, viewport desktop/mobile.",
       "input": "Storage sai cấu trúc, đổi route/date/coupon, keyboard Escape, menu/filter mobile.",
-      "steps": ["Chạy toàn bộ mười hai browser suites.", "Kiểm tra search/checkout/lookup/reschedule/admin/counter/cancellation, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
+      "steps": ["Chạy toàn bộ mười bốn browser suites.", "Kiểm tra search/checkout/lookup/reschedule/admin/counter/cancellation/dashboard/CSV, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
       "expected": "Luồng chính chạy được, không blank screen/overflow; phản hồi trễ không đổi trạng thái mới; keyboard/modal hoạt động; screenshots lưu để xem thủ công, không phải visual baseline tự động.",
       "automation": [{"file": "scripts/browser-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-admin-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-integrations-smoke.js"}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-"]}, {"file": "scripts/browser-checkout-smoke.js", "ids": ["UI-CHECK-"]}, {"file": "scripts/browser-reschedule-smoke.js", "ids": ["UI-RSCH-"]}, {"file": "scripts/browser-admin-reschedule-smoke.js", "ids": ["UI-ADMIN-RSCH-"]}, {"file": "scripts/browser-counter-recovery-smoke.js", "ids": ["UI-COUNTER-"]}, {"file": "scripts/browser-cancellation-smoke.js", "ids": ["UI-CANCEL-"]}]
     },
@@ -337,6 +337,30 @@
       "steps": ["Gây lỗi outbox DB/file sau giao dịch đặt vé đã commit.", "Kiểm tra HTTP 201 và mã vé/đơn hợp lệ.", "Replay cùng request/key và kiểm tra không chạy thông báo lần nữa.", "Kiểm tra số vé, ghế, quota, order, key và log."],
       "expected": "Đơn đã tạo vẫn trả kết quả thành công, không nhân đôi vé/ghế/quota; log mã cố định không chứa PII/token/provider details. Không thay đổi hành vi gửi token xác minh/khôi phục tài khoản.",
       "automation": [{"file": "tests/notification-recovery.test.js", "ids": ["IT-NOTIFY-"]}]
+    },
+    {
+      "id": "TC-LIBRARY-ASSETS-01", "feature": "Phục vụ thư viện nội bộ theo phiên bản đã khóa", "priority": "P1",
+      "preconditions": "Dependencies Chart.js 4.5.1 và Papa Parse 5.7.0 cài bằng package-lock; ứng dụng test loopback riêng.",
+      "input": "GET/HEAD bundle và giấy phép; đường dẫn vendor không được phép, mã hóa hoặc traversal; POST tới bundle.",
+      "steps": ["Đối chiếu nội dung và phiên bản tài nguyên với package đã cài.", "Kiểm tra MIME, nosniff, CSP cùng nguồn và giấy phép MIT.", "Thử tài nguyên không có trong allowlist trước fallback SPA."],
+      "expected": "Chỉ hai bundle cùng hai giấy phép được phục vụ; đường dẫn khác trả 404 text. Không public node_modules hoặc nới CSP; không phụ thuộc CDN.",
+      "automation": [{"file": "tests/library-assets.test.js", "ids": ["IT-LIBRARY-"]}]
+    },
+    {
+      "id": "TC-DASHBOARD-CHARTS-01", "feature": "Biểu đồ quản trị tương tác và vòng đời", "priority": "P1",
+      "preconditions": "Chrome headless; hai nhà xe, vé và chứng từ thu/hoàn trong database managed tạm riêng.",
+      "input": "Thu/hoàn khác ngày đặt; kỳ chỉ hoàn có thu ròng âm; 7/30/366 ngày; operator scope, phản hồi trễ, logout, chặn bundle và mobile390px.",
+      "steps": ["Đối chiếu dataset biểu đồ với API và bảng theo ngày Việt Nam.", "Ẩn/hiện chuỗi bằng chuột/bàn phím và kiểm tra tooltip.", "Đổi kỳ/route/phiên trong lúc phản hồi chờ; kiểm tra instance được hủy.", "Chặn Chart.js rồi dùng KPI, bộ lọc và bảng; thay viewport."],
+      "expected": "Hiển thị đầy đủ dailyRange, không cắt còn 14 ngày; giữ net âm và phạm vi nhà xe/lịch sử. Không giữ biểu đồ sau điều hướng/logout hoặc áp dụng kết quả cũ; dữ liệu chi tiết vẫn dùng khi thiếu thư viện, không tràn ngang/lỗi CSP.",
+      "automation": [{"file": "scripts/browser-dashboard-smoke.js", "ids": ["UI-DASHBOARD-"]}]
+    },
+    {
+      "id": "TC-ADMINCSV-01", "feature": "Nhập và xuất CSV qua Papa Parse", "priority": "P1",
+      "preconditions": "Helper thuần và Chrome headless, nhà xe/kho test riêng; không đọc tệp hoặc gọi API đối tác thật.",
+      "input": "Comma/semicolon/tab, BOM, CR/LF/CRLF, quote/multiline, mã có số 0 đầu; header/width sai, 500/501 chuyến, UTF8 biên2MB và công thức bảng tính.",
+      "steps": ["Phân tích tệp rồi preview/nhập qua giao diện với đúng dữ liệu và nguồn xác nhận.", "Thử lỗi cú pháp/giới hạn; kiểm tra không gửi dữ liệu sai.", "Tải CSV mẫu, đối chiếu roundtrip và trung hòa công thức khi xuất.", "Chặn Papa rồi kiểm tra CSV báo lỗi rõ và JSON tiếp tục hoạt động."],
+      "expected": "Giữ dữ liệu dạng chuỗi trước bước kiểm tra nghiệp vụ; không lẫn dấu | của danh sách với delimiter. Từ chối lỗi quote/header/cột và vượt2MB/500 chuyến; xuất BOM/CRLF đúng, không thực thi công thức; lỗi thư viện không làm hỏng JSON hoặc ứng dụng.",
+      "automation": [{"file": "tests/unit/schedule-csv.test.js", "ids": ["UT-ADMINCSV-"]}, {"file": "scripts/browser-csv-smoke.js", "ids": ["UI-CSV-"]}]
     },
     {
       "id": "TC-TOOLING-01", "feature": "Test runner, báo cáo và teardown", "priority": "P1",

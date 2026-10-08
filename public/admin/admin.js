@@ -75,6 +75,7 @@ function toast(message, isError = false) {
   setTimeout(() => element.remove(), 5500);
 }
 function showLogin(message = '') {
+  window.TicketDashboardCharts?.destroy();
   clearRescheduleAttempt();
   state.sessionId++;
   state.loadId++;
@@ -242,6 +243,7 @@ async function navigate(page, preserveFilters = false) {
   $('#menu-button').setAttribute('aria-expanded','false');
   $('#page-actions').innerHTML = page === 'trips' ? `<button class="button secondary" data-action="refresh">${icon('refresh')}Làm mới</button><button class="button primary" data-action="new-trip">${icon('plus')}Thêm chuyến</button>` : page === 'operators' ? `<button class="button primary" data-action="new-operator">${icon('plus')}Thêm nhà xe</button>` : `<button class="button secondary" data-action="refresh">${icon('refresh')}Làm mới</button>`;
   const id = ++state.loadId;
+  window.TicketDashboardCharts?.destroy();
   $('#content').innerHTML = loading();
   try {
     if (page === 'dashboard') await renderDashboard(id,oldFilters);
@@ -280,14 +282,37 @@ async function renderDashboard(id,filters = {}) {
     ['Chuyến mở bán',number(stats.activeTrips),`${number(stats.confirmedBookings)} đơn đã xác nhận trong kỳ`,'check-circle'],
   ].map(([label,value,sub,iconName]) => `<article class="stat-card"><div class="stat-top">${label}<span class="stat-icon">${icon(iconName)}</span></div><div class="stat-value">${value}</div><small>${sub}</small></article>`).join('')}</div>${dashboardAnalytics(data.analytics || {})}<div class="dashboard-grid"><section class="panel"><div class="panel-heading"><div><h3>Đơn đặt vé gần đây</h3><p>Đơn theo khoảng ngày đã chọn</p></div><a href="#bookings" data-page="bookings">Xem tất cả <span data-icon="arrow" data-icon-size="16"></span></a></div>${bookingTable(state.bookings,true)}</section><section class="panel"><div class="panel-heading"><div><h3>Sẵn sàng vận hành</h3><p>Nguồn dữ liệu và kết nối thanh toán</p></div></div><div class="panel-body"><ul class="system-list"><li><div>Thanh toán<small>${escapeHTML(methods.join(', ') || 'Chưa bật phương thức thanh toán')}</small></div><span class="badge ${methods.length ? 'green' : 'amber'}">${methods.length ? 'Đã cấu hình' : 'Chờ cấu hình'}</span></li><li><div>Phạm vi quản lý<small>${state.user.role === 'admin' ? 'Toàn bộ hệ thống' : 'Chuyến xe thuộc nhà xe của bạn'}</small></div><span class="badge teal">${state.user.role === 'admin' ? 'Quản trị' : 'Nhà xe'}</span></li></ul><div class="source-counts"><div><strong>${number(managed)}</strong>Nhà xe cung cấp</div><div><strong>${number(demo)}</strong>Dữ liệu mẫu</div></div><div class="progress-line"><span class="managed-progress"></span><span class="demo-progress"></span></div><div class="quick-links"><a href="#trips" data-page="trips" class="quick-link"><span data-icon="bus"></span>Quản lý chuyến</a><a href="#import" data-page="import" class="quick-link"><span data-icon="upload"></span>Nhập lịch trình</a><a href="#audit" data-page="audit" class="quick-link"><span data-icon="list"></span>Nhật ký thay đổi</a></div></div></section></div>`;
   $('.managed-progress').style.width = `${share}%`;
-  $('.demo-progress').style.width = `${100-share}%`;
-  $$('[data-revenue-width]').forEach(bar => { bar.style.width = `${Number(bar.dataset.revenueWidth) || 0}%`; });
+  $('.demo-progress').style.width = `${managed+demo ? 100-share : 0}%`;
+  window.TicketDashboardCharts?.render($('#content'),data.analytics || {});
 }
 function dashboardAnalytics(analytics) {
   const daily = analytics.daily || [], byStatus = analytics.byStatus || [];
-  if (!daily.length && !byStatus.length) return '';
-  const visibleDays = daily.slice(-14), maximum = Math.max(1,...visibleDays.map(day => Number(day.grossRevenue) || 0));
-  return `<div class="dashboard-grid analytics-grid"><section class="panel"><div class="panel-heading"><div><h3>Thu tiền theo ngày</h3><p>${daily.length > 14 ? '14 ngày cuối của kỳ báo cáo' : state.filters.dashboard?.dateFrom || state.filters.dashboard?.dateTo ? 'Các ngày trong khoảng báo cáo' : '14 ngày gần nhất'} · theo chứng từ ghi nhận</p></div></div><div class="panel-body"><div class="revenue-bars">${visibleDays.map(day => `<div class="revenue-row" title="${escapeHTML(formatDate(day.date))}: Thu ${money(day.grossRevenue)} · Hoàn ${money(day.refundedAmount)} · Thu ròng ${money(day.revenue)}"><span>${escapeHTML(formatDate(day.date).slice(0,5))}</span><div class="revenue-bar-track" aria-hidden="true"><div class="revenue-bar" data-revenue-width="${Math.max(0,Number(day.grossRevenue) || 0)/maximum*100}"></div></div><strong>${money(day.grossRevenue)}</strong></div>`).join('')}</div><details class="analytics-details"><summary>Xem chi tiết thu và hoàn theo ngày</summary><div class="table-wrap analytics-table"><table class="data-table"><thead><tr><th>Ngày</th><th>Đơn đặt</th><th>Đã thu</th><th>Đã hoàn</th><th>Thu ròng</th></tr></thead><tbody>${daily.map(day => `<tr><td>${escapeHTML(formatDate(day.date))}</td><td>${number(day.bookings)}</td><td class="amount">${money(day.grossRevenue)}</td><td>${money(day.refundedAmount)}</td><td class="amount">${money(day.revenue)}</td></tr>`).join('') || empty('Chưa có dữ liệu','Các giao dịch đã ghi nhận sẽ hiển thị tại đây.',5)}</tbody></table></div></details></div></section><section class="panel"><div class="panel-heading"><div><h3>Trạng thái đơn vé</h3><p>Số đơn đặt trong kỳ báo cáo</p></div></div><div class="panel-body"><ul class="system-list">${byStatus.map(item => `<li>${statusBadge(item.status)}<strong>${number(item.bookings)}</strong></li>`).join('') || '<li>Chưa có đơn trong kỳ.</li>'}</ul><div class="quick-links"><button class="quick-link" data-action="view-pending-bookings">${icon('ticket')}Xử lý đơn chờ</button><button class="quick-link" data-action="view-refund-bookings">${icon('wallet')}Đối soát hoàn tiền</button></div></div></section></div>`;
+  const methods = analytics.byPaymentMethod || [], routes = analytics.byRoute || [], range = analytics.dailyRange;
+  const period = range ? `${formatDate(range.dateFrom)} → ${formatDate(range.dateTo)}` : 'Các ngày có trong báo cáo';
+  const chart = (id,label) => `<p class="chart-fallback" data-chart-fallback hidden>Chưa hiển thị được biểu đồ. Bạn có thể xem số liệu chi tiết bên dưới.</p><div class="dashboard-chart"><canvas id="${id}" role="img" aria-label="${label}">Xem số liệu trong bảng hoặc danh sách của mục này.</canvas></div>`;
+  const details = (id,title,headers,rows) => `<details class="analytics-details"><summary>${title}</summary><div class="table-wrap analytics-table"><table id="${id}" class="data-table"><thead><tr>${headers.map(header => `<th scope="col">${header}</th>`).join('')}</tr></thead><tbody>${rows || empty('Chưa có dữ liệu','Các giao dịch đã ghi nhận sẽ hiển thị tại đây.',headers.length)}</tbody></table></div></details>`;
+  return `<div class="dashboard-grid analytics-grid dashboard-charts-grid">
+    <section class="panel" data-chart-panel><div class="panel-heading"><div><h3>Thu và hoàn tiền theo ngày</h3><p>${escapeHTML(period)} · ${number(daily.length)} ngày · theo chứng từ ghi nhận</p></div></div><div class="panel-body">
+      ${chart('dashboard-revenue-chart','Đã thu, đã hoàn và thu ròng theo ngày; số liệu đầy đủ trong bảng chi tiết')}
+      <div class="chart-series" role="group" aria-label="Hiện hoặc ẩn số liệu trên biểu đồ">${['Đã thu','Đã hoàn','Thu ròng'].map((label,index) => `<button type="button" data-chart-series="${index}" aria-pressed="true"><span class="chart-swatch series-${index}" aria-hidden="true"></span>${label}</button>`).join('')}</div>
+      ${details('dashboard-daily-table','Xem chi tiết thu và hoàn theo ngày',['Ngày','Đơn đặt','Đã thu','Đã hoàn','Thu ròng'],daily.map(day => `<tr><td>${escapeHTML(formatDate(day.date))}</td><td>${number(day.bookings)}</td><td class="amount">${money(day.grossRevenue)}</td><td>${money(day.refundedAmount)}</td><td class="amount">${money(day.revenue)}</td></tr>`).join(''))}
+    </div></section>
+    <section class="panel" data-chart-panel><div class="panel-heading"><div><h3>Trạng thái đơn vé</h3><p>Số đơn đặt trong kỳ báo cáo</p></div></div><div class="panel-body">
+      ${chart('dashboard-status-chart','Phân bố trạng thái đơn vé; số lượng từng trạng thái trong danh sách bên dưới')}
+      <ul class="system-list" id="dashboard-status-list">${byStatus.map(item => `<li>${statusBadge(item.status)}<strong>${number(item.bookings)}</strong></li>`).join('') || '<li>Chưa có đơn trong kỳ.</li>'}</ul>
+      <div class="quick-links"><button class="quick-link" data-action="view-pending-bookings">${icon('ticket')}Xử lý đơn chờ</button><button class="quick-link" data-action="view-refund-bookings">${icon('wallet')}Đối soát hoàn tiền</button></div>
+    </div></section>
+    <section class="panel" data-chart-panel><div class="panel-heading"><div><h3>Thu ròng theo thanh toán</h3><p>Tiền đã thu trừ tiền đã hoàn trong kỳ</p></div></div><div class="panel-body">
+      ${chart('dashboard-payment-chart','Thu ròng theo phương thức thanh toán; xem bảng chi tiết bên dưới')}
+      ${!methods.length ? '<p class="chart-empty">Chưa có dữ liệu thanh toán trong kỳ.</p>' : ''}
+      ${details('dashboard-payment-table','Xem chi tiết phương thức thanh toán',['Phương thức','Đơn đặt','Thu ròng'],methods.map(row => `<tr><td>${escapeHTML({cash:'Tiền mặt / tại nhà xe',vnpay:'VNPAY',momo:'MoMo',zalopay:'ZaloPay',demo:'Thanh toán mô phỏng'}[row.paymentMethod] || row.paymentMethod)}</td><td>${number(row.bookings)}</td><td class="amount">${money(row.revenue)}</td></tr>`).join(''))}
+    </div></section>
+    <section class="panel" data-chart-panel><div class="panel-heading"><div><h3>Tuyến có nhiều đơn nhất</h3><p>Biểu đồ tối đa 10 tuyến · bảng chi tiết gồm toàn bộ kết quả</p></div></div><div class="panel-body">
+      ${chart('dashboard-route-chart','Mười tuyến có nhiều đơn nhất trong kỳ; xem toàn bộ tuyến trong bảng chi tiết')}
+      ${!routes.some(row => row.bookings > 0) ? '<p class="chart-empty">Chưa có đơn đặt trên các tuyến trong kỳ.</p>' : ''}
+      ${details('dashboard-route-table','Xem chi tiết tất cả tuyến',['Tuyến','Đơn đặt','Thu ròng'],routes.map(row => `<tr><td>${escapeHTML(row.fromName || row.from)} → ${escapeHTML(row.toName || row.to)}</td><td>${number(row.bookings)}</td><td class="amount">${money(row.revenue)}</td></tr>`).join(''))}
+    </div></section>
+  </div>`;
 }
 function queryFor(filters) {
   const params = new URLSearchParams({page:String(state.pageNumber),limit:'15'});
@@ -665,24 +690,8 @@ function renderImport() {
   $('#content').innerHTML = `<div class="notice teal"><span class="notice-icon" data-icon="upload"></span><div><strong>Nhập lịch chạy từ đối tác</strong>Mỗi đợt nhập phải có mã nguồn xác nhận. Hệ thống kiểm tra toàn bộ dữ liệu trước khi lưu; lịch không hợp lệ sẽ không được nhập.</div></div><div class="import-grid"><section class="panel"><div class="panel-heading"><div><h3>Tệp lịch trình</h3><p>Hỗ trợ CSV và JSON · tối đa 500 chuyến mỗi đợt</p></div></div><div class="panel-body"><form id="import-form" class="import-form"><label>Nguồn xác nhận<input name="sourceReference" required minlength="5" maxlength="500" placeholder="Hợp đồng / Tệp lịch chạy / Email đối tác…"><small>Nguồn xác nhận được gắn vào tất cả chuyến trong đợt nhập.</small></label><div class="dropzone"><span class="dropzone-icon" data-icon="upload" data-icon-size="28"></span><strong>Chọn lịch trình do nhà xe cung cấp</strong><span>CSV hoặc JSON · tối đa 2 MB</span><input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" aria-label="Chọn tệp lịch trình"></div><label>Hoặc dán JSON / CSV<textarea name="schedule" placeholder='[{"operatorId":"ma-nha-xe","from":"ho-chi-minh","to":"da-lat","date":"2026-10-10",…}]'></textarea></label><div id="import-preview" class="preview-box" hidden></div><div class="actions"><button class="button secondary" type="button" data-action="preview-import"><span data-icon="check-circle" data-icon-size="16"></span>Kiểm tra dữ liệu</button><button class="button primary" type="submit">Nhập lịch trình <span data-icon="arrow" data-icon-size="16"></span></button></div></form></div></section><aside class="panel"><div class="panel-heading"><div><h3>Chuẩn bị dữ liệu</h3><p>Giữ nguyên mã địa điểm và mã nhà xe</p></div></div><div class="panel-body"><ol class="import-requirements"><li>Tạo nhà xe trong mục Nhà xe.</li><li>Dùng mã điểm đi, điểm đến từ danh sách địa điểm.</li><li>Ngày dùng dạng YYYY-MM-DD, giờ HH:mm.</li><li>Giá là số nguyên VND. Số chỗ từ 1 đến 60.</li><li>Loại xe: limousine, sleeper, cabin, seater.</li><li>Điểm đón, trả và tiện ích trong CSV cách nhau bằng dấu |.</li><li>Chỉ nhập lịch đã được nhà xe xác nhận và cho phép bán.</li></ol><div class="template-buttons"><button class="button secondary small" data-action="download-json">Mẫu JSON <span data-icon="download" data-icon-size="14"></span></button><button class="button secondary small" data-action="download-csv">Mẫu CSV <span data-icon="download" data-icon-size="14"></span></button><button class="button secondary small" data-action="download-locations">Mã địa điểm <span data-icon="download" data-icon-size="14"></span></button><button class="button secondary small" data-action="download-operators">Mã nhà xe <span data-icon="download" data-icon-size="14"></span></button></div><div class="notice import-notice"><div><strong>Tồn chỗ từ đối tác</strong>Lịch nhập chỉ phản ánh dữ liệu được cung cấp tại thời điểm nhập. Kết nối API nhà xe cần cấu hình riêng để đồng bộ liên tục.</div></div></div></aside></div>`;
 }
 function csvRows(text) {
-  const rows = []; let row = [], value = '', quoted = false, closedQuote = false;
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index];
-    if (char === '"') {
-      if (quoted && text[index+1] === '"') { value += '"'; index++; }
-      else if (quoted) { quoted = false; closedQuote = true; }
-      else if (!closedQuote && !value.trim()) { value = ''; quoted = true; }
-      else throw new Error('CSV có dấu nháy sai vị trí. Dùng hai dấu nháy để viết dấu nháy trong một ô.');
-    } else if (char === ',' && !quoted) { row.push(value); value = ''; closedQuote = false; }
-    else if ((char === '\n' || char === '\r') && !quoted) {
-      if (char === '\r' && text[index+1] === '\n') index++;
-      row.push(value); if (row.some(item => item.trim())) rows.push(row); row = []; value = ''; closedQuote = false;
-    } else if (closedQuote) { if (!/\s/.test(char)) throw new Error('CSV có nội dung thừa sau dấu nháy đóng.'); }
-    else value += char;
-  }
-  if (quoted) throw new Error('CSV có dấu nháy chưa đóng.');
-  row.push(value); if (row.some(item => item.trim())) rows.push(row);
-  return rows;
+  if (!window.TicketScheduleCSV) throw new Error('Chưa tải được thư viện CSV. Vui lòng tải lại trang hoặc dùng JSON.');
+  return window.TicketScheduleCSV.rows(text);
 }
 function parseImport() {
   const text = $('#import-form [name="schedule"]').value.trim().replace(/^\uFEFF/,'');
@@ -758,9 +767,8 @@ function sampleTrip() {
   return {operatorId:state.user.operatorId || state.operators.find(operator => operator.active && operator.source !== 'demo')?.id || state.operators[0]?.id || 'ma-nha-xe',from:state.locations[0]?.id || 'ho-chi-minh',to:state.locations[1]?.id || 'da-lat',date:tomorrow(),departureTime:'22:00',durationMinutes:360,price:280000,totalSeats:40,type:'sleeper',pickupPoints:['Văn phòng nhà xe'],dropoffPoints:['Bến xe đích'],amenities:['Điều hòa','Nước uống'],policies:['Có mặt trước giờ khởi hành 30 phút.'],active:true};
 }
 function toCSV(trips) {
-  const headers = Object.keys(trips[0]);
-  const cell = value => `"${String(Array.isArray(value) ? value.join('|') : value ?? '').replace(/"/g,'""')}"`;
-  return '\uFEFF' + headers.map(cell).join(',') + '\r\n' + trips.map(trip => headers.map(header => cell(trip[header])).join(',')).join('\r\n');
+  if (!window.TicketScheduleCSV) throw new Error('Chưa tải được thư viện CSV. Vui lòng tải lại trang hoặc dùng mẫu JSON.');
+  return window.TicketScheduleCSV.stringify(trips);
 }
 
 $('#login-form').addEventListener('submit', async event => {
@@ -890,7 +898,10 @@ document.addEventListener('click', async event => {
   }
   if (action === 'preview-import') return previewImport();
   if (action === 'download-json') return download('lich-trinh-mau.json',JSON.stringify([sampleTrip()],null,2));
-  if (action === 'download-csv') return download('lich-trinh-mau.csv',toCSV([sampleTrip()]),'text/csv');
+  if (action === 'download-csv') {
+    try { return download('lich-trinh-mau.csv',toCSV([sampleTrip()]),'text/csv'); }
+    catch (error) { return toast(error.message,true); }
+  }
   if (action === 'download-locations') return download('ma-dia-diem.json',JSON.stringify(state.locations.map(({id,name}) => ({id,name})),null,2));
   if (action === 'download-operators') return download('ma-nha-xe.json',JSON.stringify(state.operators.map(({id,name}) => ({id,name})),null,2));
 });

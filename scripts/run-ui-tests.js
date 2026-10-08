@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
-const suites = ['smoke', 'advanced-smoke', 'regression-smoke', 'admin-smoke', 'api-smoke', 'integrations-smoke', 'search-smoke', 'checkout-smoke', 'reschedule-smoke', 'admin-reschedule-smoke', 'counter-recovery-smoke', 'cancellation-smoke'];
+const suites = ['smoke', 'advanced-smoke', 'regression-smoke', 'admin-smoke', 'api-smoke', 'integrations-smoke', 'search-smoke', 'checkout-smoke', 'reschedule-smoke', 'admin-reschedule-smoke', 'counter-recovery-smoke', 'cancellation-smoke', 'dashboard-smoke', 'csv-smoke'];
 const timeoutMs = 180000;
 let activeChild, interrupted = false;
 

@@ -14,6 +14,14 @@
 8. Ký kết/cấu hình tài khoản merchant VNPAY nếu nhận tiền trực tuyến. Kiểm thử trước trên môi trường sandbox riêng. Khi production, dùng URL thanh toán thật được cấp và đăng ký URL IPN.
 9. Đặt và hủy vé thử trên lịch kiểm thử riêng; kiểm tra ghế được giải phóng, nhật ký và biên nhận. Sau đó mở lịch đã xác nhận cho khách.
 
+## Dashboard và nhập lịch trình
+
+Dashboard dùng Chart.js 4.5.1 cho bốn biểu đồ: thu/hoàn/thu ròng theo ngày, trạng thái đơn, thu ròng theo thanh toán và tối đa 10 tuyến nhiều đơn nhất. Bảng chi tiết tuyến vẫn gồm toàn bộ kết quả. Bộ lọc dùng ngày Việt Nam; biểu đồ ngày hiển thị đúng `analytics.dailyRange` từ API, tối đa 366 ngày, mặc định 14 ngày. KPI và các nhóm còn lại theo kỳ báo cáo đã chọn. Thu ròng có thể âm nếu kỳ này chỉ ghi nhận hoàn tiền; không thay bằng doanh số đặt vé. Nút dưới biểu đồ ngày cho phép ẩn/hiện từng chuỗi, hỗ trợ bàn phím; bảng đối chiếu không đổi khi ẩn chuỗi.
+
+Nhập CSV dùng Papa Parse 5.7.0, tự nhận dấu phẩy, chấm phẩy hoặc tab; dấu `|` vẫn phân cách các điểm/tiện ích trong một ô. Tệp có thể có UTF8 BOM, CR/LF/CRLF, dấu nháy kép và ô nhiều dòng. Mã nhà xe/địa điểm được giữ dạng chuỗi, không bỏ số 0 đầu. Giới hạn 2 MB UTF8 và 500 chuyến; tệp sai quote, tiêu đề trống/trùng hoặc sai số cột bị từ chối trước khi gửi. Xem trước và xác nhận nguồn lịch trước khi nhập; máy chủ vẫn kiểm tra nghiệp vụ/quyền và lưu nguyên đợt trong transaction.
+
+Hai thư viện được khóa phiên bản trong `package-lock.json`, là dependencies vận hành và được cài bằng `npm ci`, kể cả `--omit=dev`. Ứng dụng chỉ phục vụ hai bundle cùng giấy phép tại `/admin/vendor/`, không dùng CDN hoặc mở toàn bộ `node_modules`; CSP giữ cùng nguồn. Nếu không tải được Chart.js, KPI/bộ lọc/bảng vẫn dùng được. Nếu thiếu Papa Parse, CSV báo lỗi rõ và JSON vẫn hoạt động. Tài liệu gốc: [Chart.js](https://www.chartjs.org/docs/latest/getting-started/integration.html), [Papa Parse](https://www.papaparse.com/docs).
+
 ## Thanh toán và hoàn tiền
 
 Khách có 5 phút giữ ghế trước khi tạo vé; mỗi phiên có tối đa hai chuyến đang giữ để hỗ trợ khứ hồi. Giữ ghế không phải xác nhận đã thu tiền. Kho có ghế đang giữ hoặc đã đặt không được thay giá, lịch và sơ đồ cho đến khi hết hạn/giải phóng; ngừng mở bán vẫn giữ lịch sử.
