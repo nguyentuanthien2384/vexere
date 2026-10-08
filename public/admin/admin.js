@@ -19,11 +19,23 @@ const pages = {
   promotions: ['Khuyến mãi','ƯU ĐÃI & HẠN MỨC','Thiết lập ưu đãi theo thời gian, nhà xe và hành trình.'],
   operators: ['Nhà xe','ĐỐI TÁC VẬN CHUYỂN','Thông tin đối tác và đầu mối vận hành chuyến xe.'],
   users: ['Tài khoản','NHÂN SỰ & PHÂN QUYỀN','Cấp quyền vận hành cho nhân viên theo từng nhà xe.'],
+  audit: ['Nhật ký vận hành','TRUY VẾT & ĐỐI SOÁT','Theo dõi thay đổi lịch trình, quyền truy cập và chứng từ trong phạm vi quản lý.'],
   import: ['Nhập lịch trình','KẾT NỐI DỮ LIỆU NHÀ XE','Đưa lịch chạy do nhà xe cung cấp vào hệ thống.'],
 };
-const state = {user:null,locations:[],operators:[],routes:[],promotions:[],users:[],trips:[],bookings:[],page:'dashboard',pageNumber:1,stats:null,editor:null,importTrips:null,manifest:null,loadId:0};
+const state = {user:null,locations:[],operators:[],routes:[],promotions:[],users:[],trips:[],bookings:[],audit:[],page:'dashboard',pageNumber:1,stats:null,editor:null,importTrips:null,manifest:null,loadId:0,sessionId:0,filters:{},importBusy:false,confirm:null};
+const auditLabels = {user_created:'Cấp tài khoản',user_updated:'Đổi thông tin / quyền tài khoản',operator_created:'Thêm nhà xe',operator_updated:'Cập nhật nhà xe',operator_deactivated:'Ngừng hoạt động nhà xe',trip_created:'Thêm chuyến',trip_updated:'Cập nhật chuyến',trip_deactivated:'Ngừng bán chuyến',trip_duplicated:'Sao chép chuyến',trips_imported:'Nhập lịch trình',booking_confirmed:'Xác nhận vé',booking_cancelled:'Hủy vé',counter_booking_created:'Bán vé tại quầy',cash_received:'Ghi nhận thu tiền mặt',refund_recorded:'Ghi nhận hoàn tiền',booking_rescheduled:'Đổi chuyến',promotion_created:'Tạo ưu đãi',promotion_updated:'Cập nhật ưu đãi',promotion_deactivated:'Tạm dừng ưu đãi'};
+const entityLabels = {user:'Tài khoản',operator:'Nhà xe',trip:'Chuyến xe',import:'Đợt nhập',booking:'Đơn vé',promotion:'Ưu đãi'};
+const dateTime = value => { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',dateStyle:'short',timeStyle:'short'}).format(date); };
+const addDateDays = (value, days) => { const date = new Date(`${value}T12:00:00+07:00`); date.setUTCDate(date.getUTCDate()+days); return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit'}).format(date); };
+function validDate(value) { const date = new Date(`${value}T12:00:00+07:00`); return /^\d{4}-\d{2}-\d{2}$/.test(value || '') && !Number.isNaN(date.getTime()) && addDateDays(value,0) === value; }
+function validateRange(filters) {
+  if ((filters.dateFrom && !validDate(filters.dateFrom)) || (filters.dateTo && !validDate(filters.dateTo))) throw new Error('Khoảng ngày chưa hợp lệ.');
+  if (filters.dateFrom && filters.dateTo && filters.dateFrom > filters.dateTo) throw new Error('Ngày kết thúc cần bằng hoặc sau ngày bắt đầu.');
+  if (filters.dateFrom && filters.dateTo && new Date(`${filters.dateTo}T00:00:00+07:00`) - new Date(`${filters.dateFrom}T00:00:00+07:00`) > 365*86400000) throw new Error('Chọn khoảng tối đa 366 ngày.');
+}
 
 async function api(path, options = {}) {
+  const sessionId = state.sessionId;
   const response = await fetch(`/api${path}`, {
     credentials:'same-origin',
     headers:{Accept:'application/json', ...(options.body ? {'Content-Type':'application/json'} : {})},
@@ -33,7 +45,13 @@ async function api(path, options = {}) {
   let data;
   try { data = await response.json(); } catch { throw new Error('Máy chủ chưa sẵn sàng. Vui lòng thử lại.'); }
   if (!response.ok) {
-    if (response.status === 401 && state.user) showLogin();
+    if (response.status === 401 && state.user && sessionId === state.sessionId) showLogin('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    if (response.status === 403 && state.user && sessionId === state.sessionId) {
+      try {
+        const sessionResponse = await fetch('/api/auth/me',{credentials:'same-origin',headers:{Accept:'application/json'}}), session = await sessionResponse.json();
+        if (sessionResponse.ok && sessionId === state.sessionId && (!session.user || !['admin','operator'].includes(session.user.role) || session.user.id !== state.user?.id)) showLogin('Quyền truy cập hoặc phiên đăng nhập đã thay đổi. Vui lòng đăng nhập lại.');
+      } catch { /* Giữ phiên hiện tại nếu không xác minh được kết nối. */ }
+    }
     throw new Error(typeof data.error === 'string' ? data.error : data.error?.message || data.message || 'Không thể thực hiện yêu cầu.');
   }
   return data;
@@ -46,7 +64,16 @@ function toast(message, isError = false) {
   setTimeout(() => element.remove(), 5500);
 }
 function showLogin(message = '') {
+  state.sessionId++;
+  state.loadId++;
+  document.dispatchEvent(new CustomEvent('ticket4t:session-cleared'));
   state.user = null;
+  state.editor = null; state.manifest = null; state.confirm = null;
+  state.locations = []; state.operators = []; state.trips = []; state.bookings = []; state.promotions = []; state.users = []; state.audit = []; state.stats = null; state.importTrips = null; state.importBusy = false; state.filters = {}; state.pageNumber = 1;
+  ['#editor-dialog','#confirm-dialog','#manifest-dialog'].forEach(selector => { if ($(selector).open) $(selector).close(); });
+  $('#content').innerHTML = ''; $('#editor-fields').innerHTML = ''; $('#manifest-content').innerHTML = ''; $('#toast-stack').innerHTML = '';
+  const password = $('#login-form [name="password"]'); password.value = ''; password.type = 'password';
+  $('#toggle-password').innerHTML = `${icon('eye',16)}<span>Hiện</span>`; $('#toggle-password').setAttribute('aria-pressed','false'); $('#toggle-password').setAttribute('aria-label','Hiện mật khẩu');
   $('#portal').hidden = true;
   $('#login-screen').hidden = false;
   $('#login-error').textContent = message;
@@ -80,6 +107,26 @@ function routeName(id) { const [from,to] = String(id).split('--'); return `${loc
 function sourceBadge(source) {
   return source === 'demo' ? '<span class="badge amber">Dữ liệu mẫu</span>' : '<span class="badge teal">Nhà xe cung cấp</span>';
 }
+const auditFieldLabels = {role:'Vai trò',operatorId:'Nhà xe',active:'Hoạt động',passwordChanged:'Đã đổi mật khẩu',name:'Tên',date:'Ngày đi',departureTime:'Giờ đi',from:'Điểm đi',to:'Điểm đến',price:'Giá vé',totalSeats:'Số chỗ',durationMinutes:'Thời gian (phút)',type:'Loại',changedFields:'Thông tin đã cập nhật',count:'Số chuyến nhập',tripIds:'Mã chuyến',sourceReference:'Nguồn xác nhận',status:'Trạng thái vé',total:'Tổng tiền',reference:'Mã chứng từ',amount:'Số tiền',fromTrip:'Chuyến cũ',toTrip:'Chuyến mới',fromSeats:'Ghế cũ',toSeats:'Ghế mới',seats:'Ghế',channel:'Kênh tạo vé',value:'Mức giảm',pickupPoints:'Điểm đón',dropoffPoints:'Điểm trả',amenities:'Tiện ích',policies:'Chính sách',provenance:'Nguồn xác nhận lịch',seatPrices:'Giá theo ghế'};
+function auditDataHTML(data) {
+  const entries = Object.entries(data || {});
+  if (!entries.length) return 'Không có thông tin bổ sung.';
+  return entries.map(([key,value]) => {
+    let display = value;
+    if (Array.isArray(value)) display = value.map(item => key === 'changedFields' ? auditFieldLabels[item] || item : item).join(', ');
+    else if (key === 'operatorId' && value) display = operatorName(value);
+    else if (['from','to'].includes(key)) display = locationName(value);
+    else if (['price','total','amount'].includes(key)) display = money(value);
+    else if (key === 'status') display = statuses[value]?.[0] || value;
+    else if (key === 'role') display = {admin:'Quản trị viên',operator:'Nhân viên nhà xe',customer:'Khách hàng'}[value] || value;
+    else if (key === 'type') display = types.find(item => item.id === value)?.name || {percentage:'Giảm phần trăm',fixed:'Giảm tiền cố định'}[value] || value;
+    else if (key === 'channel') display = value === 'counter' ? 'Tại quầy' : 'Trực tuyến';
+    else if (key === 'date') display = formatDate(value);
+    else if (typeof value === 'boolean') display = value ? 'Có' : 'Không';
+    else if (value && typeof value === 'object') return `<div><strong>${escapeHTML(auditFieldLabels[key] || key)}:</strong>${auditDataHTML(value)}</div>`;
+    return `<div><strong>${escapeHTML(auditFieldLabels[key] || key)}:</strong> ${escapeHTML(display ?? '—')}</div>`;
+  }).join('');
+}
 function empty(title, description, colspan = null) {
   const content = `<div class="empty-state"><span class="empty-state-icon">${icon('search',32)}</span><h3>${escapeHTML(title)}</h3><p>${escapeHTML(description)}</p></div>`;
   return colspan ? `<tr><td colspan="${colspan}">${content}</td></tr>` : content;
@@ -87,19 +134,28 @@ function empty(title, description, colspan = null) {
 function loading() { return '<div class="loading"><span class="spinner" aria-hidden="true"></span>Đang tải dữ liệu…</div>'; }
 function pagination(data, noun) {
   const page = Number(data.page || state.pageNumber), total = Number(data.total ?? data[noun]?.length ?? 0), count = Number(data.pages || 1);
-  return `<div class="table-footer"><span>${number(total)} ${noun === 'trips' ? 'chuyến xe' : 'đơn vé'} trong kết quả</span><div class="pagination"><button type="button" data-paginate="${page - 1}"${page <= 1 ? ' disabled' : ''} aria-label="Trang trước">${icon('arrow-left',16)}</button><span>Trang ${page} / ${Math.max(count,1)}</span><button type="button" data-paginate="${page + 1}"${page >= count ? ' disabled' : ''} aria-label="Trang sau">${icon('arrow',16)}</button></div></div>`;
+  return `<div class="table-footer"><span>${number(total)} ${{trips:'chuyến xe',bookings:'đơn vé',events:'sự kiện'}[noun] || 'kết quả'} trong kết quả</span><div class="pagination"><button type="button" data-paginate="${page - 1}"${page <= 1 ? ' disabled' : ''} aria-label="Trang trước">${icon('arrow-left',16)}</button><span>Trang ${page} / ${Math.max(count,1)}</span><button type="button" data-paginate="${page + 1}"${page >= count ? ' disabled' : ''} aria-label="Trang sau">${icon('arrow',16)}</button></div></div>`;
+}
+
+async function pagedData(path, id) {
+  let data = await api(path);
+  if (id !== state.loadId) return null;
+  const lastPage = Math.max(1,Number(data.pages) || 1);
+  if (state.pageNumber > lastPage) { state.pageNumber = lastPage; const query = new URL(path,'https://ticket4t.local'); query.searchParams.set('page',String(lastPage)); data = await api(query.pathname + query.search); }
+  return id === state.loadId ? data : null;
 }
 function tripTable(trips) {
-  return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Chuyến xe / Nhà xe</th><th>Khởi hành</th><th>Loại xe & Chỗ</th><th>Giá vé</th><th>Nguồn / Trạng thái</th><th>Thao tác</th></tr></thead><tbody>${trips.map(trip => `<tr><td><strong class="primary-text">${escapeHTML(trip.fromName || trip.from)} <span aria-hidden="true">→</span> ${escapeHTML(trip.toName || trip.to)}</strong><span class="sub-text">${escapeHTML(trip.operatorName || operatorName(trip.operatorId))}</span></td><td><strong class="primary-text">${escapeHTML(trip.departureTime)}</strong><span class="sub-text">${escapeHTML(formatDate(trip.date))}</span></td><td><span>${escapeHTML(trip.typeName || typeName(trip.type))}</span><span class="sub-text">${number(trip.totalSeats)} chỗ · ${number(trip.durationMinutes)} phút</span></td><td class="amount">${money(trip.price)}</td><td>${sourceBadge(trip.source)}<span class="sub-text">${trip.active ? 'Đang mở bán' : 'Đã ngừng bán'}</span></td><td><div class="actions"><button class="action-button" data-action="manifest" data-id="${escapeHTML(trip.id)}"><span data-icon="list" data-icon-size="14"></span>Danh sách</button><button class="action-button" data-action="edit-trip" data-id="${escapeHTML(trip.id)}"><span data-icon="edit" data-icon-size="14"></span>Sửa</button><button class="action-button" data-action="duplicate-trip" data-id="${escapeHTML(trip.id)}" aria-label="Sao chép chuyến"><span data-icon="copy" data-icon-size="14"></span>Sao chép</button><button class="action-button danger-text" data-action="delete-trip" data-id="${escapeHTML(trip.id)}"><span data-icon="pause" data-icon-size="14"></span>Ngừng bán</button></div></td></tr>`).join('') || empty('Chưa có chuyến phù hợp','Thay đổi bộ lọc hoặc thêm lịch trình do nhà xe xác nhận.',6)}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Chuyến xe / Nhà xe</th><th>Khởi hành</th><th>Loại xe & Chỗ</th><th>Giá vé</th><th>Nguồn / Trạng thái</th><th>Thao tác</th></tr></thead><tbody>${trips.map(trip => `<tr><td><strong class="primary-text">${escapeHTML(trip.fromName || trip.from)} <span aria-hidden="true">→</span> ${escapeHTML(trip.toName || trip.to)}</strong><span class="sub-text">${escapeHTML(trip.operatorName || operatorName(trip.operatorId))}</span></td><td><strong class="primary-text">${escapeHTML(trip.departureTime)}</strong><span class="sub-text">${escapeHTML(formatDate(trip.date))}</span></td><td><span>${escapeHTML(trip.typeName || typeName(trip.type))}</span><span class="sub-text">${number(trip.availableSeats)} / ${number(trip.totalSeats)} chỗ trống · ${number(trip.durationMinutes)} phút</span><span class="sub-text">${number(trip.bookedSeats)} đã đặt · ${number(trip.heldSeats)} giữ tạm</span></td><td class="amount">${money(trip.price)}</td><td>${sourceBadge(trip.source)}<span class="sub-text">${!trip.active ? 'Đã ngừng bán' : trip.bookingOpen === false ? 'Đã đóng nhận vé' : 'Đang mở bán'}</span></td><td><div class="actions"><button class="action-button" data-action="counter-booking" data-id="${escapeHTML(trip.id)}"${trip.bookingOpen === false || !trip.active || !trip.availableSeats ? ' disabled' : ''}><span data-icon="plus" data-icon-size="14"></span>Bán tại quầy</button><button class="action-button" data-action="manifest" data-id="${escapeHTML(trip.id)}"><span data-icon="list" data-icon-size="14"></span>Danh sách</button><button class="action-button" data-action="edit-trip" data-id="${escapeHTML(trip.id)}"><span data-icon="edit" data-icon-size="14"></span>Sửa</button><button class="action-button" data-action="duplicate-trip" data-id="${escapeHTML(trip.id)}" aria-label="Sao chép chuyến"><span data-icon="copy" data-icon-size="14"></span>Sao chép</button><button class="action-button danger-text" data-action="delete-trip" data-id="${escapeHTML(trip.id)}"${trip.active ? '' : ' disabled'}><span data-icon="pause" data-icon-size="14"></span>Ngừng bán</button></div></td></tr>`).join('') || empty('Chưa có chuyến phù hợp','Thay đổi bộ lọc hoặc thêm lịch trình do nhà xe xác nhận.',6)}</tbody></table></div>`;
 }
 function operatorName(id) { return state.operators.find(operator => operator.id === id)?.name || id; }
 function typeName(id) { return types.find(type => type.id === id)?.name || id; }
 function bookingTable(bookings, compact = false) {
-  return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Đơn vé / Hành khách</th><th>Hành trình</th>${compact ? '' : '<th>Ghế</th>'}<th>Tổng tiền</th><th>Trạng thái</th>${compact ? '' : '<th>Thao tác</th>'}</tr></thead><tbody>${bookings.map(booking => `<tr><td><button class="action-button" data-action="booking-detail" data-id="${escapeHTML(booking.code)}">${escapeHTML(booking.code)}</button><span class="sub-text">${escapeHTML(booking.fullName)}</span>${compact ? '' : `<span class="sub-text">${escapeHTML(booking.phone)}</span>`}</td><td><strong class="primary-text">${escapeHTML(booking.trip?.fromName || booking.trip?.from || '—')} → ${escapeHTML(booking.trip?.toName || booking.trip?.to || '—')}</strong><span class="sub-text">${escapeHTML(formatDate(booking.trip?.date))} · ${escapeHTML(booking.trip?.departureTime || '')}</span></td>${compact ? '' : `<td>${escapeHTML((booking.seats || []).join(', '))}</td>`}<td><span class="amount">${money(booking.total)}</span><span class="sub-text">${paymentLabel(booking.paymentStatus)}</span></td><td>${statusBadge(booking.status)}</td>${compact ? '' : `<td><div class="actions">${['reserved','pending_payment','confirmed'].includes(booking.status) ? `<button class="action-button danger-text" data-action="cancel-booking" data-id="${escapeHTML(booking.code)}"><span data-icon="close" data-icon-size="14"></span>Hủy vé</button>` : '<span class="sub-text">—</span>'}${booking.paymentMethod === 'cash' && booking.paymentStatus !== 'paid' && !['cancelled','expired','refund_pending'].includes(booking.status) ? `<button class="action-button" data-action="cash-receipt" data-id="${escapeHTML(booking.code)}"><span data-icon="cash" data-icon-size="14"></span>Phiếu thu</button>` : ''}${canReschedule(booking) ? `<button class="action-button" data-action="reschedule-booking" data-id="${escapeHTML(booking.code)}"><span data-icon="swap" data-icon-size="14"></span>Đổi chuyến</button>` : ''}${booking.status === 'refund_pending' && booking.paymentStatus === 'refund_pending' ? `<button class="action-button" data-action="refund-receipt" data-id="${escapeHTML(booking.code)}"><span data-icon="wallet" data-icon-size="14"></span>Phiếu hoàn</button>` : ''}</div></td>`}</tr>`).join('') || empty('Chưa có đơn vé','Đơn mới sẽ hiển thị sau khi khách hàng đặt vé.',compact ? 4 : 6)}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Đơn vé / Hành khách</th><th>Hành trình</th>${compact ? '' : '<th>Ghế</th>'}<th>Tổng tiền</th><th>Trạng thái</th>${compact ? '' : '<th>Thao tác</th>'}</tr></thead><tbody>${bookings.map(booking => `<tr><td><button class="action-button" data-action="booking-detail" data-id="${escapeHTML(booking.code)}">${escapeHTML(booking.code)}</button>${booking.channel === 'counter' ? '<span class="badge teal">Tại quầy</span>' : ''}<span class="sub-text">${escapeHTML(booking.fullName)}</span>${compact ? '' : `<span class="sub-text">${escapeHTML(booking.phone)}</span>`}</td><td><strong class="primary-text">${escapeHTML(booking.trip?.fromName || booking.trip?.from || '—')} → ${escapeHTML(booking.trip?.toName || booking.trip?.to || '—')}</strong><span class="sub-text">${escapeHTML(formatDate(booking.trip?.date))} · ${escapeHTML(booking.trip?.departureTime || '')}</span></td>${compact ? '' : `<td>${escapeHTML((booking.seats || []).join(', '))}</td>`}<td><span class="amount">${money(booking.total)}</span><span class="sub-text">${paymentLabel(booking.paymentStatus)}</span></td><td>${statusBadge(booking.status)}</td>${compact ? '' : `<td><div class="actions">${['reserved','pending_payment','confirmed'].includes(booking.status) ? `<button class="action-button danger-text" data-action="cancel-booking" data-id="${escapeHTML(booking.code)}"><span data-icon="close" data-icon-size="14"></span>Hủy vé</button>` : '<span class="sub-text">—</span>'}${booking.paymentMethod === 'cash' && booking.paymentStatus === 'pending' && ['reserved','confirmed'].includes(booking.status) ? `<button class="action-button" data-action="cash-receipt" data-id="${escapeHTML(booking.code)}"><span data-icon="cash" data-icon-size="14"></span>Phiếu thu</button>` : ''}${canReschedule(booking) ? `<button class="action-button" data-action="reschedule-booking" data-id="${escapeHTML(booking.code)}"><span data-icon="swap" data-icon-size="14"></span>Đổi chuyến</button>` : ''}${booking.status === 'refund_pending' && booking.paymentStatus === 'refund_pending' ? `<button class="action-button" data-action="refund-receipt" data-id="${escapeHTML(booking.code)}"><span data-icon="wallet" data-icon-size="14"></span>Phiếu hoàn</button>` : ''}</div></td>`}</tr>`).join('') || empty('Chưa có đơn vé','Đơn mới sẽ hiển thị sau khi khách hàng đặt vé.',compact ? 5 : 6)}</tbody></table></div>`;
 }
 
 async function enterPortal(user) {
   if (!['admin','operator'].includes(user?.role)) return showLogin('Tài khoản này chưa có quyền truy cập cổng vận hành.');
+  const sessionId = ++state.sessionId;
   state.user = user;
   $('#login-screen').hidden = true;
   $('#portal').hidden = false;
@@ -112,14 +168,19 @@ async function enterPortal(user) {
   $('[data-page="promotions"]').hidden = user.role !== 'admin';
   try {
     const [locationData, operatorData] = await Promise.all([api('/locations'), api('/admin/operators')]);
+    if (sessionId !== state.sessionId || !state.user) return;
     state.locations = locationData.locations || [];
     state.operators = operatorData.operators || [];
-  } catch (error) { toast(error.message, true); }
+  } catch (error) { if (sessionId !== state.sessionId || !state.user) return; toast(error.message, true); }
   await navigate(pages[location.hash.slice(1)] ? location.hash.slice(1) : 'dashboard');
 }
 async function navigate(page, preserveFilters = false) {
   if (!state.user || !pages[page]) return;
   if (['operators','users','promotions'].includes(page) && state.user.role !== 'admin') page = 'dashboard';
+  const previousPage = state.page;
+  const oldFilters = preserveFilters ? (previousPage === page && $('#filters') ? Object.fromEntries(new FormData($('#filters'))) : state.filters[page] || {}) : {};
+  try { if (['dashboard','audit','bookings'].includes(page)) validateRange(oldFilters); } catch (error) { return toast(error.message,true); }
+  state.filters[page] = oldFilters;
   state.page = page;
   if (!preserveFilters) state.pageNumber = 1;
   location.hash = page;
@@ -133,36 +194,50 @@ async function navigate(page, preserveFilters = false) {
   $('#menu-button').setAttribute('aria-expanded','false');
   $('#page-actions').innerHTML = page === 'trips' ? `<button class="button secondary" data-action="refresh">${icon('refresh')}Làm mới</button><button class="button primary" data-action="new-trip">${icon('plus')}Thêm chuyến</button>` : page === 'operators' ? `<button class="button primary" data-action="new-operator">${icon('plus')}Thêm nhà xe</button>` : `<button class="button secondary" data-action="refresh">${icon('refresh')}Làm mới</button>`;
   const id = ++state.loadId;
-  const oldFilters = preserveFilters && $('#filters') ? Object.fromEntries(new FormData($('#filters'))) : {};
   $('#content').innerHTML = loading();
   try {
-    if (page === 'dashboard') await renderDashboard(id);
+    if (page === 'dashboard') await renderDashboard(id,oldFilters);
     if (page === 'trips') await renderTrips(id, oldFilters);
     if (page === 'bookings') await renderBookings(id, oldFilters);
     if (page === 'promotions') await renderPromotions(id,oldFilters);
     if (page === 'operators') await renderOperators(id);
     if (page === 'users') await renderUsers(id,oldFilters);
+    if (page === 'audit') await renderAudit(id,oldFilters);
     if (page === 'import') renderImport();
   } catch (error) {
     if (id === state.loadId && state.user) $('#content').innerHTML = `<div class="panel">${empty('Không thể tải dữ liệu',error.message)}<div class="dialog-footer"><button class="button primary" data-action="refresh">Thử lại</button></div></div>`;
   }
   decorateIcons($('#portal'));
 }
-async function renderDashboard(id) {
-  const [data, bookingData] = await Promise.all([api('/admin/stats'),api('/admin/bookings?limit=5')]);
+async function renderDashboard(id,filters = {}) {
+  const rangeQuery = new URLSearchParams();
+  ['dateFrom','dateTo'].forEach(key => { if (filters[key]) rangeQuery.set(key,filters[key]); });
+  const [data, bookingData] = await Promise.all([api(`/admin/stats?${rangeQuery}`),api(`/admin/bookings?limit=5&${rangeQuery}`)]);
   if (id !== state.loadId) return;
   state.stats = data;
   state.bookings = bookingData.bookings || [];
   const stats = data.stats || {}, managed = Number(stats.managedTrips || 0), demo = Number(stats.demoTrips || 0), share = managed + demo ? managed / (managed + demo) * 100 : 0;
   const methods = (data.paymentMethods || []).filter(method => method.enabled).map(method => ({vnpay:'VNPay',cash:'Tiền mặt tại quầy',demo:'Thanh toán mô phỏng'}[method.id] || method.id));
-  $('#content').innerHTML = `${demo ? '<div class="notice"><span class="notice-icon" data-icon="info"></span><div><strong>Hệ thống đang có dữ liệu mẫu</strong>Lịch mẫu dùng để kiểm thử luồng bán vé. Chỉ lịch trình có nguồn xác nhận từ nhà xe mới dùng để vận hành thực tế.</div></div>' : '<div class="notice teal"><span class="notice-icon" data-icon="shield"></span><div><strong>Lịch trình do nhà xe cung cấp</strong>Dữ liệu vận hành được quản lý theo quyền tài khoản. Kiểm tra tồn chỗ với nhà xe trước khi mở bán.</div></div>'}<div class="stats-grid">${[
-    ['Doanh thu đã thu',money(stats.revenue),'Vé có trạng thái thanh toán đã xác nhận','wallet'],
+  $('#content').innerHTML = `<form id="filters" class="filters dashboard-range"><label>Từ ngày<input name="dateFrom" type="date" value="${escapeHTML(filters.dateFrom || '')}"></label><label>Đến ngày<input name="dateTo" type="date" value="${escapeHTML(filters.dateTo || '')}"></label><button class="button primary" type="submit">${icon('filter',16)}Áp dụng</button><button class="button secondary" type="button" data-action="dashboard-range" data-range="7">7 ngày qua</button><button class="button secondary" type="button" data-action="dashboard-range" data-range="30">30 ngày qua</button><button class="button secondary" type="button" data-action="reset-filters">Toàn bộ</button></form><div class="dashboard-period">${filters.dateFrom || filters.dateTo ? `Kỳ báo cáo: ${escapeHTML(formatDate(filters.dateFrom))} → ${escapeHTML(formatDate(filters.dateTo))}` : 'Kỳ báo cáo: toàn bộ dữ liệu'} · Giờ Việt Nam. Đơn theo ngày đặt; chuyến theo ngày khởi hành; tiền theo ngày thu / hoàn.</div>${demo ? '<div class="notice"><span class="notice-icon" data-icon="info"></span><div><strong>Hệ thống đang có dữ liệu mẫu</strong>Lịch mẫu dùng để kiểm thử luồng bán vé. Chỉ lịch trình có nguồn xác nhận từ nhà xe mới dùng để vận hành thực tế.</div></div>' : '<div class="notice teal"><span class="notice-icon" data-icon="shield"></span><div><strong>Lịch trình do nhà xe cung cấp</strong>Dữ liệu vận hành được quản lý theo quyền tài khoản. Kiểm tra tồn chỗ với nhà xe trước khi mở bán.</div></div>'}<div class="stats-grid">${[
+    ['Thu ròng sau hoàn',money(stats.revenue),`Đã thu ${money(stats.grossRevenue)} · Hoàn ${money(stats.refundedAmount)}`,'wallet'],
     ['Đơn đặt vé',number(stats.bookings),`${number(stats.pendingBookings)} đơn đang chờ xử lý`,'ticket'],
     ['Chuyến xe',number(stats.trips),`${number(managed)} chuyến có nguồn nhà xe`,'bus'],
     ['Nhà xe',number(stats.operators),'Đối tác thuộc phạm vi tài khoản','building'],
-  ].map(([label,value,sub,iconName]) => `<article class="stat-card"><div class="stat-top">${label}<span class="stat-icon">${icon(iconName)}</span></div><div class="stat-value">${value}</div><small>${sub}</small></article>`).join('')}</div><div class="dashboard-grid"><section class="panel"><div class="panel-heading"><div><h3>Đơn đặt vé gần đây</h3><p>Dữ liệu cập nhật từ hệ thống bán vé</p></div><a href="#bookings" data-page="bookings">Xem tất cả <span data-icon="arrow" data-icon-size="16"></span></a></div>${bookingTable(state.bookings,true)}</section><section class="panel"><div class="panel-heading"><div><h3>Sẵn sàng vận hành</h3><p>Nguồn dữ liệu và kết nối thanh toán</p></div></div><div class="panel-body"><ul class="system-list"><li><div>Thanh toán<small>${escapeHTML(methods.join(', ') || 'Chưa bật phương thức thanh toán')}</small></div><span class="badge ${methods.length ? 'green' : 'amber'}">${methods.length ? 'Đã cấu hình' : 'Chờ cấu hình'}</span></li><li><div>Phạm vi quản lý<small>${state.user.role === 'admin' ? 'Toàn bộ hệ thống' : 'Chuyến xe thuộc nhà xe của bạn'}</small></div><span class="badge teal">${state.user.role === 'admin' ? 'Quản trị' : 'Nhà xe'}</span></li></ul><div class="source-counts"><div><strong>${number(managed)}</strong>Nhà xe cung cấp</div><div><strong>${number(demo)}</strong>Dữ liệu mẫu</div></div><div class="progress-line"><span class="managed-progress"></span><span class="demo-progress"></span></div><div class="quick-links"><a href="#trips" data-page="trips" class="quick-link"><span data-icon="bus"></span>Quản lý chuyến</a><a href="#import" data-page="import" class="quick-link"><span data-icon="upload"></span>Nhập lịch trình</a></div></div></section></div>`;
+  ].map(([label,value,sub,iconName]) => `<article class="stat-card"><div class="stat-top">${label}<span class="stat-icon">${icon(iconName)}</span></div><div class="stat-value">${value}</div><small>${sub}</small></article>`).join('')}</div><div class="stats-grid operational-stats">${[
+    ['Chờ thu tiền',money(stats.outstandingAmount),`${number(stats.pendingBookings)} đơn giữ ghế / chờ thanh toán`,'cash'],
+    ['Cần hoàn tiền',money(stats.refundPendingAmount),'Ghi phiếu hoàn sau khi thực sự chuyển tiền cho khách','wallet'],
+    ['Tỷ lệ giữ chỗ',`${number(stats.occupancyRate)}%`,`${number(stats.occupiedSeats)} chỗ có vé / giữ tạm · ${number(stats.availableSeats)} chỗ trống`,'seat'],
+    ['Chuyến mở bán',number(stats.activeTrips),`${number(stats.confirmedBookings)} đơn đã xác nhận trong kỳ`,'check-circle'],
+  ].map(([label,value,sub,iconName]) => `<article class="stat-card"><div class="stat-top">${label}<span class="stat-icon">${icon(iconName)}</span></div><div class="stat-value">${value}</div><small>${sub}</small></article>`).join('')}</div>${dashboardAnalytics(data.analytics || {})}<div class="dashboard-grid"><section class="panel"><div class="panel-heading"><div><h3>Đơn đặt vé gần đây</h3><p>Đơn theo khoảng ngày đã chọn</p></div><a href="#bookings" data-page="bookings">Xem tất cả <span data-icon="arrow" data-icon-size="16"></span></a></div>${bookingTable(state.bookings,true)}</section><section class="panel"><div class="panel-heading"><div><h3>Sẵn sàng vận hành</h3><p>Nguồn dữ liệu và kết nối thanh toán</p></div></div><div class="panel-body"><ul class="system-list"><li><div>Thanh toán<small>${escapeHTML(methods.join(', ') || 'Chưa bật phương thức thanh toán')}</small></div><span class="badge ${methods.length ? 'green' : 'amber'}">${methods.length ? 'Đã cấu hình' : 'Chờ cấu hình'}</span></li><li><div>Phạm vi quản lý<small>${state.user.role === 'admin' ? 'Toàn bộ hệ thống' : 'Chuyến xe thuộc nhà xe của bạn'}</small></div><span class="badge teal">${state.user.role === 'admin' ? 'Quản trị' : 'Nhà xe'}</span></li></ul><div class="source-counts"><div><strong>${number(managed)}</strong>Nhà xe cung cấp</div><div><strong>${number(demo)}</strong>Dữ liệu mẫu</div></div><div class="progress-line"><span class="managed-progress"></span><span class="demo-progress"></span></div><div class="quick-links"><a href="#trips" data-page="trips" class="quick-link"><span data-icon="bus"></span>Quản lý chuyến</a><a href="#import" data-page="import" class="quick-link"><span data-icon="upload"></span>Nhập lịch trình</a><a href="#audit" data-page="audit" class="quick-link"><span data-icon="list"></span>Nhật ký thay đổi</a></div></div></section></div>`;
   $('.managed-progress').style.width = `${share}%`;
   $('.demo-progress').style.width = `${100-share}%`;
+  $$('[data-revenue-width]').forEach(bar => { bar.style.width = `${Number(bar.dataset.revenueWidth) || 0}%`; });
+}
+function dashboardAnalytics(analytics) {
+  const daily = analytics.daily || [], byStatus = analytics.byStatus || [];
+  if (!daily.length && !byStatus.length) return '';
+  const visibleDays = daily.slice(-14), maximum = Math.max(1,...visibleDays.map(day => Number(day.grossRevenue) || 0));
+  return `<div class="dashboard-grid analytics-grid"><section class="panel"><div class="panel-heading"><div><h3>Thu tiền theo ngày</h3><p>${daily.length > 14 ? '14 ngày cuối của kỳ báo cáo' : state.filters.dashboard?.dateFrom || state.filters.dashboard?.dateTo ? 'Các ngày trong khoảng báo cáo' : '14 ngày gần nhất'} · theo chứng từ ghi nhận</p></div></div><div class="panel-body"><div class="revenue-bars">${visibleDays.map(day => `<div class="revenue-row" title="${escapeHTML(formatDate(day.date))}: Thu ${money(day.grossRevenue)} · Hoàn ${money(day.refundedAmount)} · Thu ròng ${money(day.revenue)}"><span>${escapeHTML(formatDate(day.date).slice(0,5))}</span><div class="revenue-bar-track" aria-hidden="true"><div class="revenue-bar" data-revenue-width="${Math.max(0,Number(day.grossRevenue) || 0)/maximum*100}"></div></div><strong>${money(day.grossRevenue)}</strong></div>`).join('')}</div><details class="analytics-details"><summary>Xem chi tiết thu và hoàn theo ngày</summary><div class="table-wrap analytics-table"><table class="data-table"><thead><tr><th>Ngày</th><th>Đơn đặt</th><th>Đã thu</th><th>Đã hoàn</th><th>Thu ròng</th></tr></thead><tbody>${daily.map(day => `<tr><td>${escapeHTML(formatDate(day.date))}</td><td>${number(day.bookings)}</td><td class="amount">${money(day.grossRevenue)}</td><td>${money(day.refundedAmount)}</td><td class="amount">${money(day.revenue)}</td></tr>`).join('') || empty('Chưa có dữ liệu','Các giao dịch đã ghi nhận sẽ hiển thị tại đây.',5)}</tbody></table></div></details></div></section><section class="panel"><div class="panel-heading"><div><h3>Trạng thái đơn vé</h3><p>Số đơn đặt trong kỳ báo cáo</p></div></div><div class="panel-body"><ul class="system-list">${byStatus.map(item => `<li>${statusBadge(item.status)}<strong>${number(item.bookings)}</strong></li>`).join('') || '<li>Chưa có đơn trong kỳ.</li>'}</ul><div class="quick-links"><button class="quick-link" data-action="view-pending-bookings">${icon('ticket')}Xử lý đơn chờ</button><button class="quick-link" data-action="view-refund-bookings">${icon('wallet')}Đối soát hoàn tiền</button></div></div></section></div>`;
 }
 function queryFor(filters) {
   const params = new URLSearchParams({page:String(state.pageNumber),limit:'15'});
@@ -170,16 +245,22 @@ function queryFor(filters) {
   return params.toString();
 }
 async function renderTrips(id, filters) {
-  const data = await api(`/admin/trips?${queryFor(filters)}`);
-  if (id !== state.loadId) return;
+  const data = await pagedData(`/admin/trips?${queryFor(filters)}`,id);
+  if (!data) return;
   state.trips = data.trips || [];
   $('#content').innerHTML = `<form id="filters" class="filters"><label>Điểm đi<select name="from">${options(state.locations,filters.from,'Tất cả điểm đi')}</select></label><label>Điểm đến<select name="to">${options(state.locations,filters.to,'Tất cả điểm đến')}</select></label><label>Ngày khởi hành<input name="date" type="date" value="${escapeHTML(filters.date || '')}"></label><label>Nhà xe<select name="operator">${options(state.operators,filters.operator,'Tất cả nhà xe')}</select></label><label>Loại xe<select name="type">${options(types,filters.type,'Tất cả loại xe')}</select></label><button class="button primary" type="submit"><span data-icon="filter" data-icon-size="16"></span>Lọc</button><button class="button secondary" type="button" data-action="reset-filters"><span data-icon="refresh" data-icon-size="16"></span>Đặt lại</button></form><div class="panel">${tripTable(state.trips)}${pagination(data,'trips')}</div>`;
 }
 async function renderBookings(id, filters) {
-  const data = await api(`/admin/bookings?${queryFor(filters)}`);
-  if (id !== state.loadId) return;
+  const data = await pagedData(`/admin/bookings?${queryFor(filters)}`,id);
+  if (!data) return;
   state.bookings = data.bookings || [];
-  $('#content').innerHTML = `<form id="filters" class="filters"><label>Mã vé / Email / Số điện thoại<input name="q" placeholder="Tìm đơn vé…" value="${escapeHTML(filters.q || '')}"></label><label>Trạng thái<select name="status">${options(Object.entries(statuses).map(([id,[name]]) => ({id,name})),filters.status,'Tất cả trạng thái')}</select></label><label>Ngày đặt<input name="date" type="date" value="${escapeHTML(filters.date || '')}"></label><button class="button primary" type="submit"><span data-icon="filter" data-icon-size="16"></span>Lọc</button><button class="button secondary" type="button" data-action="reset-filters"><span data-icon="refresh" data-icon-size="16"></span>Đặt lại</button></form><div class="panel">${bookingTable(state.bookings)}${pagination(data,'bookings')}</div>`;
+  $('#content').innerHTML = `<form id="filters" class="filters"><label>Mã vé / Email / Số điện thoại<input name="q" maxlength="60" placeholder="Tìm đơn vé…" value="${escapeHTML(filters.q || '')}"></label><label>Trạng thái<select name="status">${options(Object.entries(statuses).map(([id,[name]]) => ({id,name})),filters.status,'Tất cả trạng thái')}</select></label><label>Thanh toán<select name="paymentStatus">${options([{id:'pending',name:'Chưa thanh toán'},{id:'paid',name:'Đã thanh toán'},{id:'refund_pending',name:'Chờ hoàn tiền'},{id:'refunded',name:'Đã hoàn tiền'}],filters.paymentStatus,'Tất cả thanh toán')}</select></label><label>Ngày đặt cụ thể<input name="date" type="date" value="${escapeHTML(filters.date || '')}"></label><label>Từ ngày đặt<input name="dateFrom" type="date" value="${escapeHTML(filters.dateFrom || '')}"></label><label>Đến ngày đặt<input name="dateTo" type="date" value="${escapeHTML(filters.dateTo || '')}"></label><label>Nhà xe<select name="operator">${options(state.operators,filters.operator,'Tất cả nhà xe')}</select></label><button class="button primary" type="submit"><span data-icon="filter" data-icon-size="16"></span>Lọc</button><button class="button secondary" type="button" data-action="reset-filters"><span data-icon="refresh" data-icon-size="16"></span>Đặt lại</button></form><div class="panel">${bookingTable(state.bookings)}${pagination(data,'bookings')}</div>`;
+}
+async function renderAudit(id,filters) {
+  const data = await pagedData(`/admin/audit?${queryFor(filters)}`,id);
+  if (!data) return;
+  state.audit = data.events || [];
+  $('#content').innerHTML = `<div class="notice teal"><span class="notice-icon" data-icon="shield"></span><div><strong>Lịch sử thay đổi được lưu khi thực hiện thao tác</strong>Nhật ký giúp đối soát người thực hiện, đối tượng và thời điểm xử lý. Chỉ hiển thị dữ liệu trong phạm vi quyền của tài khoản.</div></div><form id="filters" class="filters"><label>Tìm mã / Tên người thực hiện<input name="q" maxlength="120" value="${escapeHTML(filters.q || '')}" placeholder="Mã vé, mã chuyến, tên nhân viên…"></label><label>Thao tác<select name="action">${options(Object.entries(auditLabels).map(([id,name]) => ({id,name})),filters.action,'Tất cả thao tác')}</select></label><label>Đối tượng<select name="entityType">${options(Object.entries(entityLabels).map(([id,name]) => ({id,name})),filters.entityType,'Tất cả đối tượng')}</select></label><label>Nhà xe<select name="operator">${options(state.operators,filters.operator,'Tất cả nhà xe')}</select></label><label>Từ ngày<input name="dateFrom" type="date" value="${escapeHTML(filters.dateFrom || '')}"></label><label>Đến ngày<input name="dateTo" type="date" value="${escapeHTML(filters.dateTo || '')}"></label><button class="button primary" type="submit">${icon('filter',16)}Lọc</button><button class="button secondary" type="button" data-action="reset-filters">${icon('refresh',16)}Đặt lại</button></form><div class="panel"><div class="table-wrap"><table class="data-table audit-table"><thead><tr><th>Thời điểm</th><th>Người thực hiện</th><th>Thao tác</th><th>Đối tượng</th><th>Nhà xe</th><th>Chi tiết</th></tr></thead><tbody>${state.audit.map(entry => `<tr><td>${escapeHTML(dateTime(entry.createdAt))}</td><td><strong class="primary-text">${escapeHTML(entry.actorName || entry.actorId || 'Hệ thống')}</strong><span class="sub-text">${escapeHTML({admin:'Quản trị viên',operator:'Nhân viên nhà xe',customer:'Khách hàng',system:'Hệ thống'}[entry.actorRole] || entry.actorRole || '')}</span></td><td>${escapeHTML(auditLabels[entry.action] || entry.action)}</td><td><span>${escapeHTML(entityLabels[entry.entityType] || entry.entityType)}</span><span class="sub-text">${escapeHTML(entry.entityId)}</span></td><td>${escapeHTML(entry.operatorId ? operatorName(entry.operatorId) : 'Toàn hệ thống')}</td><td><details class="audit-detail"><summary>Xem dữ liệu</summary><div class="audit-summary">${auditDataHTML(entry.data)}</div></details></td></tr>`).join('') || empty('Chưa có nhật ký phù hợp','Thử đổi bộ lọc. Các thay đổi mới sẽ được ghi nhận sau khi lưu thành công.',6)}</tbody></table></div>${pagination(data,'events')}</div>`;
 }
 async function renderOperators(id) {
   const data = await api('/admin/operators');
@@ -197,8 +278,23 @@ async function renderPromotions(id,filters) {
   $('#page-actions').innerHTML = `<button class="button secondary" data-action="refresh">${icon('refresh')}Làm mới</button><button class="button primary" data-action="new-promotion">${icon('plus')}Tạo ưu đãi</button>`;
   $('#content').innerHTML = `<div class="notice teal"><span class="notice-icon" data-icon="tag"></span><div><strong>Ưu đãi được kiểm tra khi khách đặt vé</strong>Lượt được giữ cùng đơn đặt vé. Đơn chưa thanh toán bị hủy hoặc hết hạn trả lại lượt; lượt của đơn đã thanh toán vẫn được tính.</div></div><form id="filters" class="filters"><label>Mã / Tên ưu đãi<input name="q" value="${escapeHTML(filters.q || '')}" placeholder="Tìm ưu đãi…"></label><label>Trạng thái<select name="status">${options([{id:'active',name:'Đang áp dụng'},{id:'upcoming',name:'Chưa bắt đầu'},{id:'exhausted',name:'Hết lượt'},{id:'expired',name:'Đã kết thúc'},{id:'paused',name:'Tạm dừng'}],filters.status,'Tất cả trạng thái')}</select></label><button class="button primary" type="submit"><span data-icon="filter" data-icon-size="16"></span>Lọc</button><button class="button secondary" type="button" data-action="reset-filters"><span data-icon="refresh" data-icon-size="16"></span>Đặt lại</button></form><div class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Mã / Ưu đãi</th><th>Mức giảm</th><th>Điều kiện & Phạm vi</th><th>Hiệu lực</th><th>Lượt sử dụng</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody>${promotions.map(promotion => { const [,label,color] = promotionStatus(promotion); return `<tr><td><strong class="primary-text promo-code">${escapeHTML(promotion.code)}</strong><span class="sub-text">${escapeHTML(promotion.title)}</span>${promotion.source === 'demo' ? '<span class="badge amber">Ưu đãi mẫu</span>' : ''}</td><td><strong class="amount">${promotion.type === 'percentage' ? `${number(promotion.value)}%` : money(promotion.value)}</strong><span class="sub-text">${promotion.type === 'percentage' && promotion.maxDiscount > 0 ? `Tối đa ${money(promotion.maxDiscount)}` : promotion.type === 'percentage' ? 'Không giới hạn mức giảm' : 'Giảm theo đơn'}</span></td><td><span>${promotion.minSpend > 0 ? `Đơn từ ${money(promotion.minSpend)}` : 'Không yêu cầu đơn tối thiểu'}</span><span class="sub-text">${promotion.roundTripOnly ? 'Chỉ vé khứ hồi · ' : ''}${number(promotion.perCustomer)} lượt / khách</span><span class="sub-text" title="${escapeHTML((promotion.operatorIds || []).map(operatorName).join(', '))}">${promotion.operatorIds?.length ? `${number(promotion.operatorIds.length)} nhà xe` : 'Tất cả nhà xe'} · ${promotion.routeIds?.length ? `${number(promotion.routeIds.length)} tuyến` : 'Tất cả tuyến'}</span></td><td><span>${escapeHTML(formatDate(promotion.startsAt))}</span><span class="sub-text">đến ${escapeHTML(formatDate(promotion.expiresAt))}</span></td><td><strong>${number(promotion.usedCount || 0)} / ${number(promotion.maxUses)}</strong><span class="sub-text">Đang dùng / Tổng lượt</span></td><td><span class="badge ${color}">${label}</span></td><td><div class="actions"><button class="action-button" data-action="edit-promotion" data-id="${escapeHTML(promotion.code)}"><span data-icon="edit" data-icon-size="14"></span>Sửa</button>${promotion.active ? `<button class="action-button danger-text" data-action="pause-promotion" data-id="${escapeHTML(promotion.code)}"><span data-icon="pause" data-icon-size="14"></span>Tạm dừng</button>` : ''}</div></td></tr>`; }).join('') || empty('Chưa có ưu đãi phù hợp','Tạo mã mới hoặc thay đổi bộ lọc để xem ưu đãi.',7)}</tbody></table></div><div class="table-footer"><span>${number(promotions.length)} ưu đãi trong kết quả</span><span>Thời gian hiển thị theo giờ Việt Nam</span></div></div>`;
 }
+function beginEditor(editor) {
+  state.editor = editor;
+  const form = $('#editor-form'), button = form.querySelector('[type="submit"]');
+  form.inert = false; form.removeAttribute('aria-busy');
+  button.hidden = false; button.disabled = false; button.textContent = 'Lưu thông tin';
+  $$('[data-close-dialog]').forEach(close => close.disabled = false);
+}
+function setEditorBusy(current,busy) {
+  if (state.editor !== current) return;
+  current.busy = busy;
+  const form = $('#editor-form'); form.inert = busy; form.setAttribute('aria-busy',String(busy));
+  form.querySelector('[type="submit"]').disabled = busy;
+  $$('[data-close-dialog]').forEach(close => close.disabled = busy);
+  if (!busy && current.kind === 'reschedule') updateRescheduleSummary();
+}
 function openPromotionEditor(promotion = null) {
-  state.editor = {kind:'promotion',id:promotion?.code,routes:[...(promotion?.routeIds || [])]};
+  beginEditor({kind:'promotion',id:promotion?.code,routes:[...(promotion?.routeIds || [])]});
   $('#editor-form').reset();
   $('#editor-title').textContent = promotion ? 'Chỉnh sửa ưu đãi' : 'Tạo ưu đãi';
   $('#editor-kicker').textContent = promotion?.source === 'demo' ? 'ƯU ĐÃI MẪU · KIỂM THỬ' : 'KHUYẾN MÃI & HẠN MỨC';
@@ -223,19 +319,19 @@ function updatePromotionType() {
   if (!percentage && !form.elements.maxDiscount.value) form.elements.maxDiscount.value = '0';
 }
 async function openManifest(trip) {
-  state.manifest = {tripId:trip.id};
+  const request = {tripId:trip.id}; state.manifest = request;
   $('#manifest-title').textContent = `${trip.fromName || trip.from} → ${trip.toName || trip.to}`;
   $('#manifest-content').innerHTML = loading();
   $('#manifest-dialog [data-action="print-manifest"]').disabled = true;
   $('#manifest-dialog').showModal();
   try {
     const data = await api(`/admin/trips/${encodeURIComponent(trip.id)}/manifest`);
-    if (!$('#manifest-dialog').open || state.manifest?.tripId !== trip.id) return;
-    state.manifest = {...data,tripId:trip.id};
+    if (!$('#manifest-dialog').open || state.manifest !== request) return;
+    Object.assign(request,data);
     const journey = data.trip || trip, counts = data.counts || {}, passengers = data.passengers || [];
     $('#manifest-content').innerHTML = `<div class="manifest-meta"><div><strong>${escapeHTML(journey.operatorName || operatorName(journey.operatorId))}</strong><p>${escapeHTML(formatDate(journey.date))} · ${escapeHTML(journey.departureTime)} · ${escapeHTML(journey.typeName || typeName(journey.type))}</p><small>Mã chuyến: ${escapeHTML(journey.id)}</small></div>${sourceBadge(journey.source)}</div><div class="manifest-counts"><div><strong>${number(counts.bookings ?? passengers.length)}</strong><span>Đơn vé đang giữ chỗ</span></div><div><strong>${number(counts.seats ?? passengers.reduce((sum,passenger) => sum+(passenger.seats?.length || 0),0))}</strong><span>Chỗ đang giữ</span></div><div><strong>${number(counts.paid || 0)}</strong><span>Đơn đã thanh toán</span></div><div><strong>${number(counts.unpaid || 0)}</strong><span>Đơn chưa thanh toán</span></div></div><div class="manifest-note">Danh sách gồm vé còn hiệu lực tại thời điểm tra cứu. Số chỗ đang giữ có thể gồm đơn chờ thanh toán; kiểm tra trạng thái trước khi cho khách lên xe.</div><div class="table-wrap"><table class="data-table manifest-table"><thead><tr><th>STT / Mã vé</th><th>Hành khách / Điện thoại</th><th>Ghế</th><th>Điểm đón</th><th>Điểm trả</th><th>Vé / Thanh toán</th></tr></thead><tbody>${passengers.map((passenger,index) => `<tr><td><strong>${index+1}</strong><span class="sub-text">${escapeHTML(passenger.bookingCode)}</span></td><td><strong class="primary-text">${escapeHTML(passenger.fullName)}</strong><span class="sub-text">${escapeHTML(passenger.phone)}</span></td><td><strong>${escapeHTML((passenger.seats || []).join(', '))}</strong></td><td>${escapeHTML(passenger.pickup || '—')}</td><td>${escapeHTML(passenger.dropoff || '—')}</td><td>${statusBadge(passenger.status)}<span class="sub-text">${paymentLabel(passenger.paymentStatus)}</span></td></tr>`).join('') || empty('Chưa có khách giữ chỗ','Chuyến này chưa có đơn vé còn hiệu lực.',6)}</tbody></table></div><div class="manifest-generated">Tra cứu lúc ${escapeHTML(new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',dateStyle:'short',timeStyle:'short'}).format(new Date()))} · Ticket4T</div>`;
     $('#manifest-dialog [data-action="print-manifest"]').disabled = false;
-  } catch (error) { $('#manifest-content').innerHTML = empty('Không thể tải danh sách',error.message); }
+  } catch (error) { if ($('#manifest-dialog').open && state.manifest === request) $('#manifest-content').innerHTML = empty('Không thể tải danh sách',error.message); }
 }
 async function renderUsers(id,filters) {
   const data = await api('/admin/users');
@@ -249,7 +345,7 @@ async function renderUsers(id,filters) {
 function openUserEditor(user = null) {
   const operators = state.operators.filter(operator => operator.active || operator.id === user?.operatorId);
   if (!user && !operators.length) return toast('Tạo hoặc kích hoạt nhà xe trước khi cấp tài khoản nhân viên.',true);
-  state.editor = {kind:'user',id:user?.id};
+  beginEditor({kind:'user',id:user?.id});
   $('#editor-form').reset();
   $('#editor-title').textContent = user ? 'Chỉnh sửa tài khoản' : 'Cấp tài khoản nhân viên';
   $('#editor-kicker').textContent = 'QUYỀN TRUY CẬP & NHÀ XE';
@@ -272,17 +368,24 @@ function textareaField(name, label, value, help = '', required = false) {
 }
 function openTripEditor(trip = null, duplicate = false) {
   if (!state.operators.length || !state.locations.length) return toast('Cần tạo nhà xe và cấu hình danh sách địa điểm trước khi thêm chuyến.',true);
-  state.editor = {kind:duplicate ? 'duplicate-trip' : 'trip',id:trip?.id};
+  const tripOperators = state.operators.filter(operator => (operator.active && (trip || operator.source !== 'demo')) || operator.id === trip?.operatorId);
+  if (!tripOperators.length) return toast('Cần có nhà xe vận hành thật đang hoạt động trước khi thêm chuyến. Liên hệ quản trị để cấp nhà xe.',true);
+  beginEditor({kind:duplicate ? 'duplicate-trip' : 'trip',id:trip?.id,trip});
   $('#editor-form').reset();
   $('#editor-title').textContent = duplicate ? 'Sao chép lịch trình' : trip ? 'Chỉnh sửa chuyến xe' : 'Thêm chuyến xe';
   $('#editor-kicker').textContent = trip?.source === 'demo' ? 'LỊCH TRÌNH MẪU · KIỂM THỬ' : 'LỊCH TRÌNH DO NHÀ XE XÁC NHẬN';
   $('#editor-error').textContent = '';
-  $('#editor-fields').innerHTML = `${selectField('operatorId','Nhà xe',state.operators,trip?.operatorId || state.user.operatorId)}${selectField('type','Loại xe',types,trip?.type || 'sleeper')}${selectField('from','Điểm đi',state.locations,trip?.from)}${selectField('to','Điểm đến',state.locations,trip?.to || state.locations[1]?.id)}${field('date','Ngày khởi hành',duplicate ? tomorrow() : trip?.date || tomorrow(),'required','date')}${field('departureTime','Giờ khởi hành',trip?.departureTime || '08:00','required','time')}${field('durationMinutes','Thời gian di chuyển (phút)',trip?.durationMinutes || 240,'required min="30" max="2880" step="1"','number')}${field('price','Giá vé (VND)',trip?.price || 250000,'required min="10000" max="10000000" step="1000"','number')}${field('totalSeats','Tổng số chỗ',trip?.totalSeats || 40,'required min="1" max="60" step="1"','number')}${field('sourceLabel','Nguồn dữ liệu',trip?.source === 'demo' ? 'Dữ liệu mẫu' : 'Nhà xe cung cấp','readonly', 'text',false,trip?.source === 'demo' ? 'Sửa và sao chép chuyến mẫu vẫn giữ nhãn dữ liệu mẫu.' : '')}${textareaField('pickupPoints','Điểm đón',(trip?.pickupPoints || []).join('\n'),'Mỗi điểm một dòng.',true)}${textareaField('dropoffPoints','Điểm trả',(trip?.dropoffPoints || []).join('\n'),'Mỗi điểm một dòng.',true)}${textareaField('amenities','Tiện ích',(trip?.amenities || ['Điều hòa','Nước uống']).join('\n'),'Mỗi tiện ích một dòng.')}${textareaField('policies','Chính sách',(trip?.policies || ['Có mặt trước giờ khởi hành 30 phút.']).join('\n'),'Mỗi chính sách một dòng.')}${textareaField('provenance','Nguồn xác nhận lịch trình',trip?.provenance || '','Ví dụ: Hợp đồng phân phối số 12/2026, lịch do đối tác gửi ngày 07/10/2026. Chỉ đăng lịch trình có quyền bán vé.',true)}<label class="check-label span-2"><input name="active" type="checkbox"${trip?.active !== false ? ' checked' : ''}>Mở bán chuyến này</label>`;
+  $('#editor-fields').innerHTML = `${selectField('operatorId','Nhà xe',tripOperators,trip?.operatorId || state.user.operatorId)}${selectField('type','Loại xe',types,trip?.type || 'sleeper')}${selectField('from','Điểm đi',state.locations,trip?.from)}${selectField('to','Điểm đến',state.locations,trip?.to || state.locations[1]?.id)}${field('date','Ngày khởi hành',duplicate ? tomorrow() : trip?.date || tomorrow(),'required','date')}${field('departureTime','Giờ khởi hành',trip?.departureTime || '08:00','required','time')}${field('durationMinutes','Thời gian di chuyển (phút)',trip?.durationMinutes || 240,'required min="30" max="2880" step="1"','number')}${field('price','Giá vé (VND)',trip?.price || 250000,'required min="10000" max="10000000" step="1"','number')}${field('totalSeats','Tổng số chỗ',trip?.totalSeats || 40,'required min="1" max="60" step="1"','number')}${field('sourceLabel','Nguồn dữ liệu',trip?.source === 'demo' ? 'Dữ liệu mẫu' : 'Nhà xe cung cấp','readonly', 'text',false,trip?.source === 'demo' ? 'Sửa và sao chép chuyến mẫu vẫn giữ nhãn dữ liệu mẫu.' : '')}${textareaField('pickupPoints','Điểm đón',(trip?.pickupPoints || []).join('\n'),'Mỗi điểm một dòng.',true)}${textareaField('dropoffPoints','Điểm trả',(trip?.dropoffPoints || []).join('\n'),'Mỗi điểm một dòng.',true)}${textareaField('amenities','Tiện ích',(trip?.amenities || ['Điều hòa','Nước uống']).join('\n'),'Mỗi tiện ích một dòng.')}${textareaField('policies','Chính sách',(trip?.policies || ['Có mặt trước giờ khởi hành 30 phút.']).join('\n'),'Mỗi chính sách một dòng.')}${textareaField('provenance','Nguồn xác nhận lịch trình',trip?.provenance || '','Ví dụ: Hợp đồng phân phối số 12/2026, lịch do đối tác gửi ngày 07/10/2026. Chỉ đăng lịch trình có quyền bán vé.',true)}<label class="check-label span-2"><input name="active" type="checkbox"${trip?.active !== false ? ' checked' : ''}>Mở bán chuyến này</label>`;
+  if (trip && !duplicate && Number(trip.occupiedSeats ?? (trip.totalSeats-trip.availableSeats)) > 0) {
+    const locked = ['operatorId','from','to','date','departureTime','type','totalSeats','price','durationMinutes','pickupPoints','dropoffPoints'];
+    locked.forEach(name => { const input = $('#editor-form').elements[name]; if (input) { input.disabled = true; input.required = false; } });
+    $('#editor-fields').insertAdjacentHTML('afterbegin','<div class="notice span-2"><span class="notice-icon" data-icon="info"></span><div><strong>Chuyến đã có ghế đang giữ / đã đặt</strong>Lịch, tuyến, nhà xe, giá, điểm đón trả và sơ đồ ghế được khóa để bảo vệ vé hiện có. Có thể cập nhật tiện ích, chính sách, nguồn xác nhận hoặc ngừng mở bán. Dùng Sao chép để tạo lịch mới.</div></div>');
+  }
   decorateIcons($('#editor-dialog'));
   $('#editor-dialog').showModal();
 }
 function openOperatorEditor(operator = null) {
-  state.editor = {kind:'operator',id:operator?.id};
+  beginEditor({kind:'operator',id:operator?.id});
   $('#editor-form').reset();
   $('#editor-title').textContent = operator ? 'Chỉnh sửa nhà xe' : 'Thêm nhà xe';
   $('#editor-kicker').textContent = 'ĐỐI TÁC VẬN CHUYỂN';
@@ -292,12 +395,12 @@ function openOperatorEditor(operator = null) {
   $('#editor-dialog').showModal();
 }
 async function openBookingDetail(booking) {
-    state.editor = {kind:'readonly',id:booking.code};
+  const current = {kind:'readonly',id:booking.code}; beginEditor(current);
   $('#editor-title').textContent = `Đơn ${booking.code}`;
   $('#editor-kicker').textContent = 'CHI TIẾT ĐẶT VÉ';
   $('#editor-error').textContent = '';
   $('#editor-fields').innerHTML = `<dl class="detail-list span-2">${[
-    ['Hành khách',booking.fullName],['Số điện thoại',booking.phone],['Email',booking.email],['Ghế',(booking.seats || []).join(', ')],['Tổng tiền',money(booking.total)],['Trạng thái',statuses[booking.status]?.[0] || booking.status],['Thanh toán',paymentLabel(booking.paymentStatus)],['Phương thức',({vnpay:'VNPay',cash:'Tiền mặt',demo:'Mô phỏng'}[booking.paymentMethod] || booking.paymentMethod)],['Ngày đặt',formatDate(booking.createdAt)],['Ngày đi',`${formatDate(booking.trip?.date)} · ${booking.trip?.departureTime || ''}`],['Điểm đón',booking.pickup],['Điểm trả',booking.dropoff],['Nhà xe',booking.trip?.operatorName],['Nguồn lịch trình',booking.trip?.source === 'demo' ? 'Dữ liệu mẫu' : 'Nhà xe cung cấp'],
+    ['Hành khách',booking.fullName],['Kênh tạo vé',booking.channel === 'counter' ? 'Tại quầy' : 'Trực tuyến'],['Người tạo',booking.createdBy || 'Khách hàng'],['Số điện thoại',booking.phone],['Email',booking.email],['Ghế',(booking.seats || []).join(', ')],['Tổng tiền',money(booking.total)],['Trạng thái',statuses[booking.status]?.[0] || booking.status],['Thanh toán',paymentLabel(booking.paymentStatus)],['Phương thức',({vnpay:'VNPay',cash:'Tiền mặt',demo:'Mô phỏng'}[booking.paymentMethod] || booking.paymentMethod)],['Ngày đặt',formatDate(booking.createdAt)],['Ngày đi',`${formatDate(booking.trip?.date)} · ${booking.trip?.departureTime || ''}`],['Điểm đón',booking.pickup],['Điểm trả',booking.dropoff],['Nhà xe',booking.trip?.operatorName],['Nguồn lịch trình',booking.trip?.source === 'demo' ? 'Dữ liệu mẫu' : 'Nhà xe cung cấp'],
   ].map(([label,value]) => `<div><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value || '—')}</dd></div>`).join('')}</dl>`;
   $('#editor-form [type="submit"]').hidden = true;
   $('#editor-fields').insertAdjacentHTML('beforeend','<section class="span-2 audit-panel"><h3>Lịch sử xử lý</h3><div id="audit-events" class="audit-events">Đang tải lịch sử…</div></section>');
@@ -305,22 +408,23 @@ async function openBookingDetail(booking) {
   $('#editor-dialog').showModal();
   try {
     const data = await api(`/admin/bookings/${encodeURIComponent(booking.code)}/events`);
-    if (state.editor?.kind !== 'readonly' || state.editor.id !== booking.code) return;
+    if (state.editor !== current || !$('#editor-dialog').open) return;
     const labels = {created:'Đặt vé',cancelled:'Hủy đơn',refund_requested:'Yêu cầu hoàn tiền',rescheduled:'Đổi chuyến',refund_recorded:'Đã ghi nhận hoàn tiền',payment_failed:'Thanh toán thất bại',payment_verified:'Xác nhận thanh toán qua VNPay',late_payment_refund_required:'Thanh toán trễ · cần hoàn tiền',operator_confirmed:'Nhà xe xác nhận vé',cash_received:'Ghi nhận thu tiền mặt'};
     $('#audit-events').innerHTML = (data.events || []).map(entry => `<article><div><strong>${escapeHTML(labels[entry.event] || entry.event)}</strong><small>${escapeHTML(new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',dateStyle:'short',timeStyle:'short'}).format(new Date(entry.created_at || entry.createdAt)))}</small></div><p>Thực hiện: ${escapeHTML(entry.actor === 'guest' ? 'Khách vãng lai' : entry.actor === 'vnpay' ? 'VNPay' : entry.actor)}</p>${entry.data?.reference ? `<p>Chứng từ: ${escapeHTML(entry.data.reference)}</p>` : ''}${entry.data?.amount ? `<p>Số tiền: ${money(entry.data.amount)}</p>` : ''}</article>`).join('') || '<p>Chưa có nhật ký xử lý.</p>';
-  } catch (error) { if ($('#audit-events')) $('#audit-events').textContent = error.message; }
+  } catch (error) { if (state.editor === current && $('#editor-dialog').open && $('#audit-events')) $('#audit-events').textContent = error.message; }
 }
 function openCashReceipt(booking) {
-  state.editor = {kind:'cash-receipt',id:booking.code};
+  beginEditor({kind:'cash-receipt',id:booking.code,booking});
   $('#editor-title').textContent = `Phiếu thu · ${booking.code}`;
   $('#editor-kicker').textContent = 'XÁC NHẬN THU TIỀN TẠI QUẦY';
   $('#editor-error').textContent = '';
-  $('#editor-fields').innerHTML = `<div class="notice teal span-2"><div><strong>${money(booking.total)}</strong>Chỉ ghi nhận sau khi đã thu đủ tiền mặt. Phiếu thu được lưu để đối soát.</div></div>${field('reference','Số phiếu thu / Mã chứng từ','','required minlength="5" maxlength="100"','text',true)}`;
+  $('#editor-fields').innerHTML = `<div class="notice teal span-2"><div><strong>${money(booking.total)} · ${escapeHTML(booking.fullName)}</strong>Chỉ ghi nhận sau khi đã thu đủ tiền mặt. Phiếu thu được lưu để đối soát.</div></div>${field('amount','Số tiền đã thu (VND)',booking.total,'required readonly min="1" step="1"','number',true)}${field('reference','Số phiếu thu / Mã chứng từ','','required minlength="5" maxlength="100"','text',true)}<label class="check-label span-2"><input type="checkbox" name="cashConfirmed" required>Tôi xác nhận đã thu đủ số tiền trên từ khách hàng.</label>`;
+  $('#editor-form [type="submit"]').textContent = 'Ghi nhận phiếu thu';
   decorateIcons($('#editor-dialog'));
   $('#editor-dialog').showModal();
 }
 async function openReschedule(booking) {
-  state.editor = {kind:'reschedule',id:booking.code,booking,target:null,seats:[]};
+  beginEditor({kind:'reschedule',id:booking.code,booking,target:null,seats:[]});
   $('#editor-title').textContent = `Đổi chuyến · ${booking.code}`;
   $('#editor-kicker').textContent = 'ĐỔI LỊCH TRONG CÙNG NHÀ XE';
   $('#editor-error').textContent = '';
@@ -342,31 +446,34 @@ async function findRescheduleTrips() {
   form.elements.tripId.innerHTML = '<option value="">Đang tìm chuyến…</option>';
   $('#editor-error').textContent = '';
   const date = form.elements.targetDate.value;
+  if (!validDate(date)) { form.elements.tripId.innerHTML = '<option value="">Chọn ngày đi hợp lệ…</option>'; $('#editor-error').textContent = 'Chọn ngày đi mới trước khi tìm chuyến.'; return; }
   try {
     const query = new URLSearchParams({operator:booking.trip.operatorId,from:booking.trip.from,to:booking.trip.to,date,limit:'100'});
     const data = await api(`/admin/trips?${query}`);
     if (state.editor !== current || current.searchId !== searchId) return;
-    current.candidates = (data.trips || []).filter(trip => trip.id !== booking.tripId && trip.active && trip.source === booking.trip.source && new Date(`${trip.date}T${trip.departureTime}:00+07:00`).getTime() > Date.now()+2*3600000);
+    current.candidates = (data.trips || []).filter(trip => trip.id !== booking.tripId && trip.active && trip.source === booking.trip.source && Number(trip.availableSeats) >= booking.seats.length && new Date(`${trip.date}T${trip.departureTime}:00+07:00`).getTime() > Date.now()+2*3600000);
     form.elements.tripId.innerHTML = '<option value="">Chọn chuyến mới…</option>' + current.candidates.map(trip => `<option value="${escapeHTML(trip.id)}">${escapeHTML(trip.departureTime)} · ${escapeHTML(trip.typeName || typeName(trip.type))} · ${money(trip.price)} / chỗ · ${number(trip.availableSeats)} chỗ trống</option>`).join('');
     form.elements.tripId.disabled = !current.candidates.length;
     if (!current.candidates.length) $('#reschedule-target').innerHTML = '<div class="notice"><div>Không có chuyến đáp ứng tuyến, nhà xe, nguồn dữ liệu và thời gian trong ngày đã chọn. Thử ngày khác.</div></div>';
   } catch (error) { if (state.editor === current && current.searchId === searchId) $('#editor-error').textContent = error.message; }
 }
 async function loadRescheduleTarget(id) {
-  if (state.editor?.kind !== 'reschedule' || !id) return;
+  if (state.editor?.kind !== 'reschedule') return;
   const current = state.editor;
+  const targetRequest = (current.targetRequest || 0)+1; current.targetRequest = targetRequest;
   current.target = null; current.seats = [];
+  if (!id) { $('#reschedule-target').innerHTML = ''; $('#editor-form [type="submit"]').disabled = true; return; }
   $('#reschedule-target').innerHTML = loading();
   $('#editor-form [type="submit"]').disabled = true;
   $('#editor-error').textContent = '';
   try {
     const trip = await api(`/trips/${encodeURIComponent(id)}`);
-    if (state.editor !== current || $('#editor-form').elements.tripId.value !== id) return;
+    if (state.editor !== current || current.targetRequest !== targetRequest || $('#editor-form').elements.tripId.value !== id) return;
     current.target = trip;
     const points = (name,items,selected) => `<label>${name === 'pickup' ? 'Điểm đón mới' : 'Điểm trả mới'}<select name="${name}" required>${(items || []).map(item => `<option value="${escapeHTML(item)}"${item === selected ? ' selected' : ''}>${escapeHTML(item)}</option>`).join('')}</select></label>`;
     $('#reschedule-target').innerHTML = `<div class="reschedule-points">${points('pickup',trip.pickupPoints,current.booking.pickup)}${points('dropoff',trip.dropoffPoints,current.booking.dropoff)}</div><div class="reschedule-seat-heading"><strong>Chọn ${number(current.booking.seats.length)} chỗ mới</strong><span>Trống · <i></i> Đã có khách</span></div><div class="reschedule-seats">${(trip.seats || []).map(seat => `<button class="reschedule-seat${seat.status !== 'available' ? ' unavailable' : ''}" type="button" data-action="toggle-reschedule-seat" data-seat="${escapeHTML(seat.label)}"${seat.status !== 'available' ? ' disabled' : ''} aria-pressed="false"><strong>${escapeHTML(seat.label)}</strong><small>${money(seat.price || trip.price)}</small></button>`).join('')}</div><div id="reschedule-summary" class="reschedule-summary"></div>`;
     updateRescheduleSummary();
-  } catch (error) { if (state.editor === current) $('#reschedule-target').innerHTML = empty('Không thể tải ghế',error.message); }
+  } catch (error) { if (state.editor === current && current.targetRequest === targetRequest) $('#reschedule-target').innerHTML = empty('Không thể tải ghế',error.message); }
 }
 function updateRescheduleSummary() {
   if (state.editor?.kind !== 'reschedule' || !state.editor.target) return;
@@ -380,7 +487,7 @@ function updateRescheduleSummary() {
   $$('.reschedule-seat').forEach(button => { const selected = seats.includes(button.dataset.seat); button.classList.toggle('selected',selected); button.setAttribute('aria-pressed',String(selected)); });
 }
 function openRefundReceipt(booking) {
-  state.editor = {kind:'refund-receipt',id:booking.code};
+  beginEditor({kind:'refund-receipt',id:booking.code,booking});
   $('#editor-title').textContent = `Phiếu hoàn tiền · ${booking.code}`;
   $('#editor-kicker').textContent = 'ĐỐI SOÁT GIAO DỊCH ĐÃ HOÀN';
   $('#editor-error').textContent = '';
@@ -389,35 +496,47 @@ function openRefundReceipt(booking) {
   decorateIcons($('#editor-dialog'));
   $('#editor-dialog').showModal();
 }
-function closeEditor() {
+function closeEditor(force = false) {
+  if (state.editor?.busy && !force) return;
   $('#editor-dialog').close();
   $('#editor-form [type="submit"]').hidden = false;
   state.editor = null;
 }
 async function confirmAction(title, message, callback, buttonText = 'Xác nhận') {
+  const current = {busy:false,sessionId:state.sessionId}; state.confirm = current;
   $('#confirm-title').textContent = title;
   $('#confirm-message').textContent = message;
   $('#confirm-submit').textContent = buttonText;
   $('#confirm-submit').onclick = async () => {
+    if (state.confirm !== current || current.busy || current.sessionId !== state.sessionId) return;
     const button = $('#confirm-submit');
-    button.disabled = true;
-    try { await callback(); $('#confirm-dialog').close(); } catch (error) { toast(error.message,true); } finally { button.disabled = false; }
+    current.busy = true; button.disabled = true;
+    $$('[data-close-confirm]').forEach(close => close.disabled = true);
+    try { await callback(); if (state.confirm === current) $('#confirm-dialog').close(); } catch (error) { if (current.sessionId === state.sessionId) toast(error.message,true); }
+    finally { if (state.confirm === current) current.busy = false; button.disabled = false; $$('[data-close-confirm]').forEach(close => close.disabled = false); }
   };
   $('#confirm-dialog').showModal();
 }
-const splitLines = value => value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+const splitLines = value => String(value ?? '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
 
 function renderImport() {
   state.importTrips = null;
   $('#content').innerHTML = `<div class="notice teal"><span class="notice-icon" data-icon="upload"></span><div><strong>Nhập lịch chạy từ đối tác</strong>Mỗi đợt nhập phải có mã nguồn xác nhận. Hệ thống kiểm tra toàn bộ dữ liệu trước khi lưu; lịch không hợp lệ sẽ không được nhập.</div></div><div class="import-grid"><section class="panel"><div class="panel-heading"><div><h3>Tệp lịch trình</h3><p>Hỗ trợ CSV và JSON · tối đa 500 chuyến mỗi đợt</p></div></div><div class="panel-body"><form id="import-form" class="import-form"><label>Nguồn xác nhận<input name="sourceReference" required minlength="5" maxlength="500" placeholder="Hợp đồng / Tệp lịch chạy / Email đối tác…"><small>Nguồn xác nhận được gắn vào tất cả chuyến trong đợt nhập.</small></label><div class="dropzone"><span class="dropzone-icon" data-icon="upload" data-icon-size="28"></span><strong>Chọn lịch trình do nhà xe cung cấp</strong><span>CSV hoặc JSON · tối đa 2 MB</span><input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" aria-label="Chọn tệp lịch trình"></div><label>Hoặc dán JSON / CSV<textarea name="schedule" placeholder='[{"operatorId":"ma-nha-xe","from":"ho-chi-minh","to":"da-lat","date":"2026-10-10",…}]'></textarea></label><div id="import-preview" class="preview-box" hidden></div><div class="actions"><button class="button secondary" type="button" data-action="preview-import"><span data-icon="check-circle" data-icon-size="16"></span>Kiểm tra dữ liệu</button><button class="button primary" type="submit">Nhập lịch trình <span data-icon="arrow" data-icon-size="16"></span></button></div></form></div></section><aside class="panel"><div class="panel-heading"><div><h3>Chuẩn bị dữ liệu</h3><p>Giữ nguyên mã địa điểm và mã nhà xe</p></div></div><div class="panel-body"><ol class="import-requirements"><li>Tạo nhà xe trong mục Nhà xe.</li><li>Dùng mã điểm đi, điểm đến từ danh sách địa điểm.</li><li>Ngày dùng dạng YYYY-MM-DD, giờ HH:mm.</li><li>Giá là số nguyên VND. Số chỗ từ 1 đến 60.</li><li>Loại xe: limousine, sleeper, cabin, seater.</li><li>Điểm đón, trả và tiện ích trong CSV cách nhau bằng dấu |.</li><li>Chỉ nhập lịch đã được nhà xe xác nhận và cho phép bán.</li></ol><div class="template-buttons"><button class="button secondary small" data-action="download-json">Mẫu JSON <span data-icon="download" data-icon-size="14"></span></button><button class="button secondary small" data-action="download-csv">Mẫu CSV <span data-icon="download" data-icon-size="14"></span></button><button class="button secondary small" data-action="download-locations">Mã địa điểm <span data-icon="download" data-icon-size="14"></span></button><button class="button secondary small" data-action="download-operators">Mã nhà xe <span data-icon="download" data-icon-size="14"></span></button></div><div class="notice import-notice"><div><strong>Tồn chỗ từ đối tác</strong>Lịch nhập chỉ phản ánh dữ liệu được cung cấp tại thời điểm nhập. Kết nối API nhà xe cần cấu hình riêng để đồng bộ liên tục.</div></div></div></aside></div>`;
 }
 function csvRows(text) {
-  const rows = []; let row = [], value = '', quoted = false;
+  const rows = []; let row = [], value = '', quoted = false, closedQuote = false;
   for (let index = 0; index < text.length; index++) {
     const char = text[index];
-    if (char === '"') { if (quoted && text[index+1] === '"') { value += '"'; index++; } else quoted = !quoted; }
-    else if (char === ',' && !quoted) { row.push(value); value = ''; }
-    else if ((char === '\n' || char === '\r') && !quoted) { if (char === '\r' && text[index+1] === '\n') index++; row.push(value); if (row.some(item => item.trim())) rows.push(row); row = []; value = ''; }
+    if (char === '"') {
+      if (quoted && text[index+1] === '"') { value += '"'; index++; }
+      else if (quoted) { quoted = false; closedQuote = true; }
+      else if (!closedQuote && !value.trim()) { value = ''; quoted = true; }
+      else throw new Error('CSV có dấu nháy sai vị trí. Dùng hai dấu nháy để viết dấu nháy trong một ô.');
+    } else if (char === ',' && !quoted) { row.push(value); value = ''; closedQuote = false; }
+    else if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && text[index+1] === '\n') index++;
+      row.push(value); if (row.some(item => item.trim())) rows.push(row); row = []; value = ''; closedQuote = false;
+    } else if (closedQuote) { if (!/\s/.test(char)) throw new Error('CSV có nội dung thừa sau dấu nháy đóng.'); }
     else value += char;
   }
   if (quoted) throw new Error('CSV có dấu nháy chưa đóng.');
@@ -427,14 +546,15 @@ function csvRows(text) {
 function parseImport() {
   const text = $('#import-form [name="schedule"]').value.trim().replace(/^\uFEFF/,'');
   if (!text) throw new Error('Chọn tệp hoặc dán dữ liệu lịch trình trước.');
+  if (new Blob([text]).size > 2*1024*1024) throw new Error('Dữ liệu quá lớn. Mỗi đợt nhập tối đa 2 MB.');
   let trips;
   if (/^[\[{]/.test(text)) {
     const parsed = JSON.parse(text);
     trips = Array.isArray(parsed) ? parsed : parsed.trips;
   } else {
-    const [headers,...rows] = csvRows(text);
+    const [rawHeaders,...rows] = csvRows(text), headers = rawHeaders?.map(header => header.trim());
     if (!headers?.length || !rows.length) throw new Error('CSV cần có tiêu đề và ít nhất một chuyến.');
-    if (new Set(headers).size !== headers.length) throw new Error('CSV có tên cột trùng nhau.');
+    if (headers.some(header => !header) || new Set(headers).size !== headers.length) throw new Error('CSV có tên cột trống hoặc trùng nhau.');
     trips = rows.map((row,index) => {
       if (row.length !== headers.length) throw new Error(`Dòng ${index+2}: số cột không khớp tiêu đề.`);
       return Object.fromEntries(headers.map((header,column) => [header.trim(),row[column].trim()]));
@@ -442,20 +562,32 @@ function parseImport() {
   }
   if (!Array.isArray(trips) || !trips.length || trips.length > 500) throw new Error('Mỗi đợt nhập cần từ 1 đến 500 chuyến.');
   return trips.map((trip,index) => {
+    if (!trip || typeof trip !== 'object' || Array.isArray(trip)) throw new Error(`Chuyến ${index+1}: dữ liệu cần là một đối tượng lịch trình.`);
     const data = {...trip};
+    ['operatorId','from','to','date','departureTime','type'].forEach(field => data[field] = String(data[field] ?? '').trim());
     ['durationMinutes','price','totalSeats'].forEach(field => data[field] = Number(data[field]));
     ['pickupPoints','dropoffPoints','amenities','policies'].forEach(field => data[field] = Array.isArray(data[field]) ? data[field] : String(data[field] || '').split('|').map(item => item.trim()).filter(Boolean));
-    data.active = ![false,'false','0',0].includes(data.active);
+    const active = typeof data.active === 'string' ? data.active.trim().toLowerCase() : data.active;
+    if (active !== undefined && ![true,false,'true','false','1','0',1,0,''].includes(active)) throw new Error(`Chuyến ${index+1}: trạng thái active cần true hoặc false.`);
+    data.active = ![false,'false','0',0].includes(active);
     const errors = [];
-    if (!state.operators.some(operator => operator.id === data.operatorId)) errors.push('mã nhà xe chưa tồn tại');
+    const operator = state.operators.find(operator => operator.id === data.operatorId);
+    if (!operator || !operator.active) errors.push('mã nhà xe chưa tồn tại hoặc đã ngừng hoạt động');
+    else if (operator.source === 'demo') errors.push('cần nhà xe vận hành thật; không nhập lịch thật cho nhà xe mẫu');
     if (!state.locations.some(location => location.id === data.from) || !state.locations.some(location => location.id === data.to)) errors.push('mã địa điểm không hợp lệ');
     if (data.from === data.to) errors.push('điểm đi và đến phải khác nhau');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(data.date || '')) errors.push('ngày phải là YYYY-MM-DD');
+    if (!validDate(data.date)) errors.push('ngày phải là ngày hợp lệ dạng YYYY-MM-DD');
+    else if (data.date < today() || data.date > addDateDays(today(),365)) errors.push('ngày cần nằm trong 365 ngày tới');
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(data.departureTime || '')) errors.push('giờ phải là HH:mm');
+    else if (validDate(data.date) && new Date(`${data.date}T${data.departureTime}:00+07:00`).getTime() <= Date.now()+30*60000) errors.push('khởi hành cần cách hiện tại ít nhất 30 phút');
     if (!types.some(type => type.id === data.type)) errors.push('loại xe không hợp lệ');
     if (!Number.isInteger(data.price) || data.price < 10000 || data.price > 10000000) errors.push('giá vé từ 10.000 đến 10.000.000 VND');
     if (!Number.isInteger(data.totalSeats) || data.totalSeats < 1 || data.totalSeats > 60) errors.push('số chỗ từ 1 đến 60');
     if (!Number.isInteger(data.durationMinutes) || data.durationMinutes < 30 || data.durationMinutes > 2880) errors.push('thời gian từ 30 đến 2.880 phút');
+    ['pickupPoints','dropoffPoints','amenities','policies'].forEach(field => {
+      if (data[field].length > 20 || data[field].some(item => typeof item !== 'string' || item.length > 500)) errors.push(`danh sách ${field} cần tối đa 20 mục văn bản, mỗi mục tối đa 500 ký tự`);
+      else data[field] = data[field].map(item => item.trim()).filter(Boolean);
+    });
     if (!data.pickupPoints.length || !data.dropoffPoints.length) errors.push('cần điểm đón và điểm trả');
     if (errors.length) throw new Error(`Chuyến ${index+1}: ${errors.join('; ')}.`);
     return data;
@@ -482,7 +614,7 @@ function download(filename, content, mime = 'application/json') {
   link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
 }
 function sampleTrip() {
-  return {operatorId:state.user.operatorId || state.operators[0]?.id || 'ma-nha-xe',from:state.locations[0]?.id || 'ho-chi-minh',to:state.locations[1]?.id || 'da-lat',date:tomorrow(),departureTime:'22:00',durationMinutes:360,price:280000,totalSeats:40,type:'sleeper',pickupPoints:['Văn phòng nhà xe'],dropoffPoints:['Bến xe đích'],amenities:['Điều hòa','Nước uống'],policies:['Có mặt trước giờ khởi hành 30 phút.'],active:true};
+  return {operatorId:state.user.operatorId || state.operators.find(operator => operator.active && operator.source !== 'demo')?.id || state.operators[0]?.id || 'ma-nha-xe',from:state.locations[0]?.id || 'ho-chi-minh',to:state.locations[1]?.id || 'da-lat',date:tomorrow(),departureTime:'22:00',durationMinutes:360,price:280000,totalSeats:40,type:'sleeper',pickupPoints:['Văn phòng nhà xe'],dropoffPoints:['Bến xe đích'],amenities:['Điều hòa','Nước uống'],policies:['Có mặt trước giờ khởi hành 30 phút.'],active:true};
 }
 function toCSV(trips) {
   const headers = Object.keys(trips[0]);
@@ -493,6 +625,7 @@ function toCSV(trips) {
 $('#login-form').addEventListener('submit', async event => {
   event.preventDefault();
   const button = event.target.querySelector('[type="submit"]');
+  if (button.disabled) return;
   button.disabled = true;
   $('#login-error').textContent = '';
   try { const data = await api('/auth/login',{method:'POST',body:Object.fromEntries(new FormData(event.target))}); await enterPortal(data.user); event.target.reset(); }
@@ -507,16 +640,40 @@ $('#toggle-password').addEventListener('click', event => {
   event.currentTarget.setAttribute('aria-pressed',String(input.type === 'text'));
 });
 $('#logout-button').addEventListener('click',async () => {
-  try { await api('/auth/logout',{method:'POST',body:{}}); showLogin(); } catch (error) { toast(error.message,true); }
+  const button = $('#logout-button'); button.disabled = true;
+  try { await api('/auth/logout',{method:'POST',body:{}}); showLogin(); } catch (error) { toast(error.message,true); } finally { button.disabled = false; }
 });
 $('#menu-button').addEventListener('click', () => {
   const open = $('#sidebar').classList.toggle('open');
   $('#menu-button').setAttribute('aria-expanded',String(open));
 });
+document.addEventListener('keydown',event => {
+  if (event.key === 'Escape' && $('#sidebar').classList.contains('open')) { $('#sidebar').classList.remove('open'); $('#menu-button').setAttribute('aria-expanded','false'); $('#menu-button').focus(); }
+});
+document.addEventListener('click',event => {
+  if ($('#sidebar').classList.contains('open') && !event.target.closest('#sidebar') && !event.target.closest('#menu-button')) { $('#sidebar').classList.remove('open'); $('#menu-button').setAttribute('aria-expanded','false'); }
+});
 $$('[data-close-dialog]').forEach(button => button.addEventListener('click',closeEditor));
-$('#editor-dialog').addEventListener('close',() => { const button = $('#editor-form [type="submit"]'); button.hidden = false; button.disabled = false; button.textContent = 'Lưu thông tin'; });
-$$('[data-close-confirm]').forEach(button => button.addEventListener('click',() => $('#confirm-dialog').close()));
+$('#editor-dialog').addEventListener('cancel',event => { if (state.editor?.busy) event.preventDefault(); });
+$('#editor-dialog').addEventListener('close',() => {
+  if ($('#editor-dialog').open) return;
+  state.editor = null;
+  const form = $('#editor-form'), button = form.querySelector('[type="submit"]');
+  form.inert = false; form.removeAttribute('aria-busy'); button.hidden = false; button.disabled = false; button.textContent = 'Lưu thông tin';
+  $$('[data-close-dialog]').forEach(close => close.disabled = false);
+});
+$$('[data-close-confirm]').forEach(button => button.addEventListener('click',() => { if (!state.confirm?.busy) $('#confirm-dialog').close(); }));
+$('#confirm-dialog').addEventListener('cancel',event => { if (state.confirm?.busy) event.preventDefault(); });
+$('#confirm-dialog').addEventListener('close',() => { if ($('#confirm-dialog').open) return; state.confirm = null; $('#confirm-submit').disabled = false; $$('[data-close-confirm]').forEach(close => close.disabled = false); });
 $$('[data-close-manifest]').forEach(button => button.addEventListener('click',() => { $('#manifest-dialog').close(); state.manifest = null; }));
+$('#manifest-dialog').addEventListener('close',() => { if (!$('#manifest-dialog').open) state.manifest = null; });
+document.addEventListener('ticket4t:session-expired',() => showLogin('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'));
+document.addEventListener('ticket4t:counter-booked',async event => {
+  if (!state.user || !event.detail?.code) return;
+  toast(`Đã tạo vé ${event.detail.code}. Chưa ghi nhận thu tiền.`);
+  await navigate('bookings');
+  if (state.user) openBookingDetail(event.detail);
+});
 document.addEventListener('click', async event => {
   const navigation = event.target.closest('[data-page]');
   if (navigation) { event.preventDefault(); if (navigation.dataset.page !== state.page) await navigate(navigation.dataset.page); return; }
@@ -528,10 +685,19 @@ document.addEventListener('click', async event => {
   const trip = state.trips.find(trip => trip.id === id), operator = state.operators.find(operator => operator.id === id), booking = state.bookings.find(booking => booking.code === id);
   if (action === 'refresh') return navigate(state.page,true);
   if (action === 'reset-filters') return navigate(state.page);
+  if (action === 'dashboard-range') {
+    const form = $('#filters'); form.elements.dateTo.value = today(); form.elements.dateFrom.value = addDateDays(today(),1-Number(button.dataset.range));
+    state.pageNumber = 1; return navigate('dashboard',true);
+  }
+  if (action === 'view-pending-bookings' || action === 'view-refund-bookings') {
+    state.filters.bookings = {...(state.filters.dashboard || {}),status:action === 'view-refund-bookings' ? 'refund_pending' : '',paymentStatus:action === 'view-pending-bookings' ? 'pending' : 'refund_pending'};
+    state.pageNumber = 1; return navigate('bookings',true);
+  }
   if (action === 'new-trip') return openTripEditor();
   if (action === 'edit-trip' && trip) return openTripEditor(trip);
   if (action === 'duplicate-trip' && trip) return openTripEditor(trip,true);
   if (action === 'manifest' && trip) return openManifest(trip);
+  if (action === 'counter-booking' && trip) return window.TicketCounter?.open(trip,state.user);
   if (action === 'print-manifest' && state.manifest && $('#manifest-dialog').open) return window.print();
   if (action === 'new-promotion') return openPromotionEditor();
   if (action === 'edit-promotion') { const promotion = state.promotions.find(promotion => promotion.code === id); if (promotion) return openPromotionEditor(promotion); }
@@ -576,12 +742,19 @@ document.addEventListener('submit',async event => {
   if (event.target.id === 'filters') { event.preventDefault(); state.pageNumber = 1; await navigate(state.page,true); }
   if (event.target.id === 'import-form') {
     event.preventDefault();
+    if (state.importBusy) return;
     const trips = previewImport(); if (!trips) return;
     const sourceReference = event.target.elements.sourceReference.value.trim();
     if (sourceReference.length < 5) return toast('Nguồn xác nhận cần ít nhất 5 ký tự.',true);
-    const button = event.target.querySelector('[type="submit"]'); button.disabled = true;
-    try { const data = await api('/admin/import',{method:'POST',body:{source:'operator',sourceReference,trips}}); toast(`Đã nhập ${number(data.imported ?? data.count ?? trips.length)} chuyến xe.`); await navigate('trips'); }
-    catch (error) { toast(error.message,true); } finally { button.disabled = false; }
+    const form = event.target, button = form.querySelector('[type="submit"]'), sessionId = state.sessionId;
+    state.importBusy = true; form.inert = true; button.disabled = true;
+    try {
+      const data = await api('/admin/import',{method:'POST',body:{source:'operator',sourceReference,trips}});
+      if (sessionId !== state.sessionId || !state.user) return;
+      toast(`Đã nhập ${number(data.imported ?? data.count ?? trips.length)} chuyến xe.`);
+      if (state.page === 'import' && $('#import-form') === form) await navigate('trips');
+    } catch (error) { if (sessionId === state.sessionId) toast(error.message,true); }
+    finally { state.importBusy = false; form.inert = false; button.disabled = false; }
   }
 });
 document.addEventListener('change', async event => {
@@ -596,59 +769,86 @@ document.addEventListener('change', async event => {
   if (event.target.id !== 'import-file') return;
   const file = event.target.files[0]; if (!file) return;
   if (file.size > 2*1024*1024) { toast('Tệp quá lớn. Chọn tệp tối đa 2 MB.',true); event.target.value = ''; return; }
-  try { $('#import-form [name="schedule"]').value = await file.text(); previewImport(); } catch { toast('Không đọc được tệp.',true); }
+  const form = $('#import-form'), input = event.target;
+  try { const content = await file.text(); if ($('#import-form') !== form || input.files[0] !== file || !state.user) return; form.elements.schedule.value = content; previewImport(); }
+  catch { if ($('#import-form') === form) toast('Không đọc được tệp.',true); }
 });
 $('#editor-form').addEventListener('submit', async event => {
-  event.preventDefault(); if (!state.editor || state.editor.kind === 'readonly') return;
-  const {kind,id} = state.editor, form = event.target, data = Object.fromEntries(new FormData(form)), button = form.querySelector('[type="submit"]');
-  button.disabled = true; $('#editor-error').textContent = '';
+  event.preventDefault();
+  const current = state.editor;
+  if (!current || current.kind === 'readonly' || current.busy || !event.target.reportValidity()) return;
+  const {kind,id} = current, sessionId = state.sessionId, form = event.target, data = Object.fromEntries(new FormData(form));
+  setEditorBusy(current,true); $('#editor-error').textContent = '';
+  let path, method = id ? 'PATCH' : 'POST', targetPage, success;
   try {
     if (kind === 'reschedule') {
-      const current = state.editor;
       if (!current.target || current.seats.length !== current.booking.seats.length) throw new Error('Chọn chuyến và đủ số ghế mới trước khi đổi.');
-      await api(`/admin/bookings/${encodeURIComponent(id)}/reschedule`,{method:'POST',body:{tripId:current.target.id,seats:[...current.seats],pickup:data.pickup,dropoff:data.dropoff}});
-      closeEditor(); toast('Đã đổi chuyến và chuyển ghế của đơn vé.'); await navigate('bookings',true);
+      path = `/admin/bookings/${encodeURIComponent(id)}/reschedule`; method = 'POST';
+      Object.keys(data).forEach(key => delete data[key]);
+      Object.assign(data,{tripId:current.target.id,seats:[...current.seats],pickup:form.elements.pickup.value,dropoff:form.elements.dropoff.value});
+      targetPage = 'bookings'; success = 'Đã đổi chuyến và chuyển ghế của đơn vé.';
     } else if (kind === 'promotion') {
       ['value','minSpend','maxDiscount','maxUses','perCustomer'].forEach(field => data[field] = Number(data[field]));
-      data.code = data.code.trim().toUpperCase();
+      data.code = data.code.trim().toUpperCase(); data.title = data.title.trim();
       if (!/^[A-Z0-9_-]{3,32}$/.test(data.code)) throw new Error('Mã ưu đãi cần từ 3–32 chữ, số, dấu gạch ngang hoặc gạch dưới.');
-      data.active = form.elements.active.checked;
-      data.roundTripOnly = form.elements.roundTripOnly.checked;
-      data.operatorIds = new FormData(form).getAll('operatorIds');
-      data.routeIds = [...state.editor.routes];
-      data.startsAt = new Date(`${data.startsAt}:00+07:00`).toISOString();
-      data.expiresAt = new Date(`${data.expiresAt}:00+07:00`).toISOString();
+      if (data.title.length < 2) throw new Error('Tên ưu đãi cần ít nhất 2 ký tự.');
+      data.active = form.elements.active.checked; data.roundTripOnly = form.elements.roundTripOnly.checked;
+      data.operatorIds = new FormData(form).getAll('operatorIds'); data.routeIds = [...current.routes];
+      data.startsAt = new Date(`${data.startsAt}:00+07:00`).toISOString(); data.expiresAt = new Date(`${data.expiresAt}:00+07:00`).toISOString();
       if (data.startsAt >= data.expiresAt) throw new Error('Thời gian kết thúc cần sau thời gian bắt đầu.');
       if (data.type === 'fixed') data.maxDiscount = 0;
       delete data.promotionFrom; delete data.promotionTo;
-      await api(`/admin/promotions${id ? `/${encodeURIComponent(id)}` : ''}`,{method:id ? 'PATCH' : 'POST',body:data});
-      closeEditor(); toast('Đã lưu mã ưu đãi.'); await navigate('promotions',true);
-    } else if (kind === 'refund-receipt') {
-      if (!form.elements.receiptConfirmed.checked) throw new Error('Cần xác nhận tiền đã được hoàn đủ cho khách hàng.');
-      await api(`/admin/bookings/${encodeURIComponent(id)}/refund-receipt`,{method:'POST',body:{reference:data.reference.trim(),amount:Number(data.amount)}});
-      closeEditor(); toast('Đã lưu chứng từ hoàn tiền.'); await navigate('bookings',true);
-    } else if (kind === 'cash-receipt') {
-      await api(`/admin/bookings/${encodeURIComponent(id)}/cash-receipt`,{method:'POST',body:{reference:data.reference.trim()}});
-      closeEditor(); toast('Đã ghi nhận phiếu thu tiền mặt.'); await navigate('bookings',true);
+      path = `/admin/promotions${id ? `/${encodeURIComponent(id)}` : ''}`;
+      targetPage = 'promotions'; success = 'Đã lưu mã ưu đãi.';
+    } else if (kind === 'refund-receipt' || kind === 'cash-receipt') {
+      const confirmed = kind === 'cash-receipt' ? form.elements.cashConfirmed.checked : form.elements.receiptConfirmed.checked;
+      if (!confirmed) throw new Error(kind === 'cash-receipt' ? 'Cần xác nhận đã thu đủ tiền từ khách hàng.' : 'Cần xác nhận tiền đã được hoàn đủ cho khách hàng.');
+      const reference = data.reference.trim(), amount = Number(data.amount);
+      if (reference.length < 5) throw new Error('Mã chứng từ cần ít nhất 5 ký tự sau khi bỏ khoảng trắng.');
+      if (!Number.isSafeInteger(amount) || amount !== current.booking.total) throw new Error('Số tiền cần đúng bằng tổng tiền của đơn vé.');
+      Object.keys(data).forEach(key => delete data[key]); Object.assign(data,{reference,amount});
+      path = `/admin/bookings/${encodeURIComponent(id)}/${kind}`; method = 'POST'; targetPage = 'bookings';
+      success = kind === 'cash-receipt' ? 'Đã ghi nhận phiếu thu tiền mặt.' : 'Đã lưu chứng từ hoàn tiền.';
     } else if (kind === 'user') {
+      data.fullName = data.fullName.trim(); data.email = data.email.trim().toLowerCase(); data.phone = data.phone.trim();
+      if (data.fullName.length < 2) throw new Error('Họ tên cần ít nhất 2 ký tự.');
+      if (!/^0\d{9,10}$/.test(data.phone.replace(/[\s().-]/g,'').replace(/^\+84/,'0'))) throw new Error('Nhập số điện thoại Việt Nam hợp lệ (10–11 số).');
       data.active = form.elements.active.checked;
       if (id && !data.password) delete data.password;
-      await api(`/admin/users${id ? `/${encodeURIComponent(id)}` : ''}`,{method:id ? 'PATCH' : 'POST',body:data});
-      closeEditor(); toast('Đã lưu tài khoản và quyền truy cập.'); await navigate('users',true);
+      if (data.password !== undefined && (data.password.length < 10 || !/[A-Z]/.test(data.password) || !/[a-z]/.test(data.password) || !/\d/.test(data.password))) throw new Error('Mật khẩu cần ít nhất 10 ký tự, có chữ hoa, chữ thường và chữ số.');
+      if (data.role === 'customer') data.operatorId = null;
+      path = `/admin/users${id ? `/${encodeURIComponent(id)}` : ''}`; targetPage = 'users'; success = 'Đã lưu tài khoản và quyền truy cập.';
     } else if (kind === 'operator') {
+      data.name = data.name.trim(); data.phone = data.phone.trim(); data.email = data.email.trim().toLowerCase();
+      if (data.name.length < 2) throw new Error('Tên nhà xe cần ít nhất 2 ký tự.');
+      if (data.phone && !/^0\d{9,10}$/.test(data.phone.replace(/[\s().-]/g,'').replace(/^\+84/,'0'))) throw new Error('Nhập số điện thoại Việt Nam hợp lệ (10–11 số).');
       data.active = form.elements.active.checked;
-      await api(`/admin/operators${id ? `/${encodeURIComponent(id)}` : ''}`,{method:id ? 'PATCH' : 'POST',body:data});
-      closeEditor(); toast('Đã lưu thông tin nhà xe.'); await navigate('operators');
+      path = `/admin/operators${id ? `/${encodeURIComponent(id)}` : ''}`; targetPage = 'operators'; success = 'Đã lưu thông tin nhà xe.';
     } else {
+      const locked = ['operatorId','from','to','date','departureTime','type','totalSeats','price','durationMinutes','pickupPoints','dropoffPoints'];
+      locked.forEach(field => { if (form.elements[field]?.disabled && current.trip) data[field] = current.trip[field]; });
       ['durationMinutes','price','totalSeats'].forEach(field => data[field] = Number(data[field]));
-      ['pickupPoints','dropoffPoints','amenities','policies'].forEach(field => data[field] = splitLines(data[field]));
-      data.active = form.elements.active.checked;
+      ['pickupPoints','dropoffPoints','amenities','policies'].forEach(field => { data[field] = Array.isArray(data[field]) ? data[field] : splitLines(data[field]); });
+      data.active = form.elements.active.checked; data.provenance = data.provenance.trim(); delete data.sourceLabel;
       if (data.from === data.to) throw new Error('Điểm đi và điểm đến phải khác nhau.');
-      const path = kind === 'duplicate-trip' ? `/admin/trips/${encodeURIComponent(id)}/duplicate` : `/admin/trips${id ? `/${encodeURIComponent(id)}` : ''}`;
-      await api(path,{method:id && kind !== 'duplicate-trip' ? 'PATCH' : 'POST',body:data});
-      closeEditor(); toast(kind === 'duplicate-trip' ? 'Đã sao chép chuyến xe.' : 'Đã lưu chuyến xe.'); await navigate('trips',true);
+      if (!data.provenance) throw new Error('Cần ghi nguồn xác nhận lịch trình.');
+      if (!data.pickupPoints.length || !data.dropoffPoints.length) throw new Error('Cần ít nhất một điểm đón và một điểm trả.');
+      // Các trường lịch bị khóa giữ nguyên; máy chủ kiểm tra lại ghế đang giữ trước khi lưu.
+      if (!current.trip || kind === 'duplicate-trip' || !form.elements.date.disabled) {
+        if (!validDate(data.date) || data.date < today() || data.date > addDateDays(today(),365)) throw new Error('Ngày khởi hành cần nằm trong 365 ngày tới.');
+        if (new Date(`${data.date}T${data.departureTime}:00+07:00`).getTime() <= Date.now()+30*60000) throw new Error('Giờ khởi hành cần cách hiện tại ít nhất 30 phút.');
+      }
+      path = kind === 'duplicate-trip' ? `/admin/trips/${encodeURIComponent(id)}/duplicate` : `/admin/trips${id ? `/${encodeURIComponent(id)}` : ''}`;
+      if (kind === 'duplicate-trip') method = 'POST';
+      targetPage = 'trips'; success = kind === 'duplicate-trip' ? 'Đã sao chép chuyến xe.' : 'Đã lưu chuyến xe.';
     }
-  } catch (error) { $('#editor-error').textContent = error.message; } finally { button.disabled = false; }
+    await api(path,{method,body:data});
+    if (state.editor !== current || sessionId !== state.sessionId || !state.user) return;
+    closeEditor(true); toast(success);
+    await navigate(targetPage,true);
+  } catch (error) {
+    if (state.editor === current && sessionId === state.sessionId && $('#editor-dialog').open) $('#editor-error').textContent = error.message;
+  } finally { if (state.editor === current) setEditorBusy(current,false); }
 });
 window.addEventListener('hashchange',() => { const page = location.hash.slice(1); if (state.user && pages[page] && page !== state.page) navigate(page); });
 (async () => {

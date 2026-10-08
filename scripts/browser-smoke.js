@@ -146,6 +146,7 @@ const { createApp } = require('../index');
     await admin.locator('[data-page="bookings"]').first().click();
     await admin.locator(`[data-action="cash-receipt"][data-id="${managedBooking.booking.code}"]`).click();
     await admin.fill('#editor-form [name="reference"]', 'QA-CASH-' + Date.now());
+    await admin.check('#editor-form [name="cashConfirmed"]');
     const cashResponse = admin.waitForResponse(response => response.url().endsWith('/cash-receipt'));
     await admin.locator('#editor-form button[type="submit"]').click();
     const paidBooking = await (await cashResponse).json();

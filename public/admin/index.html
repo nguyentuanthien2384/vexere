@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/app/icons.css">
   <script src="/app/icons.js" defer></script>
   <script src="/admin/admin.js" defer></script>
+  <script src="/admin/counter.js" defer></script>
 </head>
 <body>
   <section id="login-screen" class="login-screen">
@@ -37,6 +38,7 @@
         <button data-page="promotions" class="nav-button"><span class="nav-icon" data-icon="tag"></span>Khuyến mãi</button>
         <button data-page="operators" class="nav-button"><span class="nav-icon" data-icon="building"></span>Nhà xe</button>
         <button data-page="users" class="nav-button"><span class="nav-icon" data-icon="users"></span>Tài khoản</button>
+        <button data-page="audit" class="nav-button"><span class="nav-icon" data-icon="list"></span>Nhật ký vận hành</button>
         <button data-page="import" class="nav-button"><span class="nav-icon" data-icon="upload"></span>Nhập lịch trình</button>
       </nav>
       <div class="sidebar-bottom"><div class="workspace-badge"><span data-icon="shield" data-icon-size="14"></span>Phân quyền theo tài khoản</div><a href="/" class="public-link">Mở trang bán vé <span data-icon="arrow-up-right" data-icon-size="16"></span></a><button id="logout-button" class="logout-button"><span data-icon="logout" data-icon-size="16"></span>Đăng xuất</button></div>
@@ -47,9 +49,9 @@
       <footer class="portal-footer">Ticket4T · Hệ thống điều hành vé xe <span id="portal-date"></span></footer>
     </div>
   </div>
-  <dialog id="editor-dialog" class="editor-dialog"><form id="editor-form"><div class="dialog-heading"><div><span class="eyebrow" id="editor-kicker">THÔNG TIN</span><h2 id="editor-title">Chỉnh sửa</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Đóng"><span data-icon="close" data-icon-size="18"></span></button></div><div id="editor-fields" class="form-grid"></div><p id="editor-error" class="error-text" role="alert"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close-dialog>Hủy</button><button class="button primary" type="submit">Lưu thông tin</button></div></form></dialog>
-  <dialog id="confirm-dialog" class="confirm-dialog"><div class="dialog-heading"><h2 id="confirm-title">Xác nhận</h2><button class="icon-button" type="button" data-close-confirm aria-label="Đóng"><span data-icon="close" data-icon-size="18"></span></button></div><p id="confirm-message"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close-confirm>Quay lại</button><button id="confirm-submit" class="button danger" type="button">Xác nhận</button></div></dialog>
-  <dialog id="manifest-dialog" class="manifest-dialog"><div class="dialog-heading"><div><span class="eyebrow">DANH SÁCH LÊN XE</span><h2 id="manifest-title">Danh sách chuyến xe</h2></div><button class="icon-button" type="button" data-close-manifest aria-label="Đóng danh sách"><span data-icon="close" data-icon-size="18"></span></button></div><div id="manifest-content"></div><div class="dialog-footer"><button class="button secondary" type="button" data-close-manifest>Đóng</button><button class="button primary" type="button" data-action="print-manifest"><span data-icon="print" data-icon-size="16"></span>In danh sách</button></div></dialog>
+  <dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title"><form id="editor-form"><div class="dialog-heading"><div><span class="eyebrow" id="editor-kicker">THÔNG TIN</span><h2 id="editor-title">Chỉnh sửa</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Đóng"><span data-icon="close" data-icon-size="18"></span></button></div><div id="editor-fields" class="form-grid"></div><p id="editor-error" class="error-text" role="alert"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close-dialog>Hủy</button><button class="button primary" type="submit">Lưu thông tin</button></div></form></dialog>
+  <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message"><div class="dialog-heading"><h2 id="confirm-title">Xác nhận</h2><button class="icon-button" type="button" data-close-confirm aria-label="Đóng"><span data-icon="close" data-icon-size="18"></span></button></div><p id="confirm-message"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close-confirm>Quay lại</button><button id="confirm-submit" class="button danger" type="button">Xác nhận</button></div></dialog>
+  <dialog id="manifest-dialog" class="manifest-dialog" aria-labelledby="manifest-title"><div class="dialog-heading"><div><span class="eyebrow">DANH SÁCH LÊN XE</span><h2 id="manifest-title">Danh sách chuyến xe</h2></div><button class="icon-button" type="button" data-close-manifest aria-label="Đóng danh sách"><span data-icon="close" data-icon-size="18"></span></button></div><div id="manifest-content"></div><div class="dialog-footer"><button class="button secondary" type="button" data-close-manifest>Đóng</button><button class="button primary" type="button" data-action="print-manifest"><span data-icon="print" data-icon-size="16"></span>In danh sách</button></div></dialog>
   <div class="toast-stack" id="toast-stack" role="status"></div>
 </body>
 </html>

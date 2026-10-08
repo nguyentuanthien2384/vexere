@@ -118,11 +118,17 @@ test('VNPay validates signature and amount, return cannot mark paid, IPN is idem
 
 test('late paid IPN after seat reallocation queues refund without displacing the next customer',async () => {
   const trip=await createTrip(),held=await request('/bookings',{method:'POST',body:bookingBody(trip,['A01'],{paymentMethod:'vnpay'})}),booking=held.data.booking;
+  const before=(await request('/admin/stats',{cookie:adminCookie})).data;
   await api.db.transaction(tx => tx.run('UPDATE bookings SET expires_at=? WHERE code=?',[new Date(Date.now()-1000).toISOString(),booking.code]));
   const next=await request('/bookings',{method:'POST',body:bookingBody(trip,['A01'])}); assert.equal(next.status,201);
   assert.equal((await request('/payments/vnpay/ipn?'+callbackQuery(callbackParams(booking)))).data.RspCode,'00');
   const late=await request('/bookings/lookup?code='+booking.code+'&phone=0901234567'); assert.equal(late.data.booking.status,'refund_pending');
   const owner=await api.db.get('SELECT booking_code FROM reserved_seats WHERE trip_id=? AND seat=?',[trip.id,'A01']); assert.equal(owner.booking_code,next.data.booking.code);
+  const collected=(await request('/admin/stats',{cookie:adminCookie})).data;assert.equal(collected.stats.grossRevenue,before.stats.grossRevenue+booking.total);assert.equal(collected.stats.revenue,before.stats.revenue+booking.total);
+  assert.equal(collected.analytics.byPaymentMethod.find(row=>row.paymentMethod==='vnpay').revenue,before.analytics.byPaymentMethod.find(row=>row.paymentMethod==='vnpay').revenue+booking.total);
+  const beforeDay=before.analytics.daily.find(row=>row.date===todayVietnam()),collectedDay=collected.analytics.daily.find(row=>row.date===todayVietnam());assert.equal(collectedDay.grossRevenue,beforeDay.grossRevenue+booking.total);
+  const refunded=await request('/admin/bookings/'+booking.code+'/refund-receipt',{method:'POST',cookie:adminCookie,body:{reference:'LATE-IPN-REFUND-'+Date.now(),amount:booking.total}});assert.equal(refunded.status,200);
+  const closed=(await request('/admin/stats',{cookie:adminCookie})).data.stats;assert.equal(closed.grossRevenue,collected.stats.grossRevenue);assert.equal(closed.refundedAmount,before.stats.refundedAmount+booking.total);assert.equal(closed.revenue,before.stats.revenue);
 });
 
 test('cash receipts have unique real references and booking history survives close of sales',async () => {

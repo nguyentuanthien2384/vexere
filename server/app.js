@@ -10,6 +10,7 @@ const {createMailer} = require('./mailer');
 const {parseCsv} = require('./import');
 const {createBookingFeatures,BOOKING_LEAD_MINUTES}=require('./booking-features');
 const {initializeDemoFixtures}=require('./demo-fixtures');
+const {adminStats,dateRange,addDateClauses,bookingTripField}=require('./admin-analytics');
 
 class ApiError extends Error { constructor(status,message,code='VALIDATION_ERROR') { super(message); this.status = status; this.code = code; } }
 function fail(status,message,code) { throw new ApiError(status,message,code); }
@@ -79,6 +80,14 @@ async function createApi(options={}) {
   const requireStaff = (req,res,next) => ['admin','operator'].includes(req.user?.role) ? next() : next(new ApiError(403,'Bạn không có quyền quản lý.','FORBIDDEN'));
   const requireAdmin = (req,res,next) => req.user?.role === 'admin' ? next() : next(new ApiError(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN'));
   function scope(req,operatorId) { if (req.user.role === 'operator' && req.user.operatorId !== operatorId) fail(403,'Chuyến xe thuộc nhà xe khác.','FORBIDDEN'); }
+  async function staffActor(tx,req) {
+    const row=await tx.get('SELECT * FROM users WHERE id=?'+lock,[req.user?.id || '']);
+    if (!row || row.active!==1 || !['admin','operator'].includes(row.role) || Number(row.auth_version)!==Number(req.session?.authVersion)) fail(403,'Phiên quản lý đã thay đổi. Vui lòng đăng nhập lại.','FORBIDDEN');
+    req.user=safeUser(row);return req.user;
+  }
+  async function adminAudit(tx,req,action,entityType,entityId,operatorId=null,data={}) {
+    await tx.run('INSERT INTO admin_audit_events(id,actor_id,actor_name,actor_role,action,entity_type,entity_id,operator_id,created_at,data) VALUES(?,?,?,?,?,?,?,?,?,?)',[crypto.randomUUID(),req.user.id,req.user.fullName,req.user.role,action,entityType,String(entityId),operatorId,nowISO(),json(data)]);
+  }
   let features;
 
   async function expire(tx,tripId) {
@@ -104,7 +113,7 @@ async function createApi(options={}) {
     return {...trip,id:row.id,operatorId:row.operator_id,operatorName:op?.name || trip.operatorName,
       rating:op?.rating ?? trip.rating ?? 0,reviewCount:op?.reviewCount ?? 0,
       bookingCutoffAt,bookingOpen:row.active === 1 && row.operator_active === 1 && Date.parse(bookingCutoffAt)>Date.now(),
-      active:row.active === 1,source:row.source,availableSeats:Math.max(0,row.total_seats-Number(row.reserved_count || 0)-Number(row.held_count || 0))};
+      active:row.active === 1,source:row.source,bookedSeats:Number(row.reserved_count || 0),heldSeats:Number(row.held_count || 0),occupiedSeats:Number(row.reserved_count || 0)+Number(row.held_count || 0),availableSeats:Math.max(0,row.total_seats-Number(row.reserved_count || 0)-Number(row.held_count || 0))};
   }
   const tripSelect = 'SELECT t.*,o.data AS operator_data,o.active AS operator_active,(SELECT COUNT(*) FROM reserved_seats s WHERE s.trip_id=t.id) AS reserved_count,(SELECT COUNT(*) FROM hold_seats hs WHERE hs.trip_id=t.id) AS held_count FROM trips t JOIN operators o ON o.id=t.operator_id';
   async function getTrip(id,tx=db,{activeOnly=false}={}) {
@@ -164,7 +173,7 @@ async function createApi(options={}) {
     const trips = rows.map(decorate);
     return {trips,total:Number(count.n),page,pages:Math.ceil(Number(count.n)/limit)};
   }
-  features=createBookingFeatures({db,env,fail,endpoint,clean,phone,validPhone,validEmail,getTrip,getBooking,bookingOwner,audit,expire,refreshExpired,requireUser,requireAdmin,scope,payments,mail});
+  features=createBookingFeatures({db,env,fail,endpoint,clean,phone,validPhone,validEmail,getTrip,getBooking,bookingOwner,audit,adminAudit,staffActor,expire,refreshExpired,requireUser,requireAdmin,scope,payments,mail});
   features.installPublic(router);
 
   router.get('/health',endpoint(async (req,res) => { await db.get('SELECT 1 AS ok'); res.json({ok:true,database:db.dialect,dataMode:await mode()}); }));
@@ -309,12 +318,13 @@ async function createApi(options={}) {
     const initial=await db.get('SELECT trip_id FROM bookings WHERE code=?',[code]);
     if (!initial) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
     return db.transaction(async tx => {
+      if (staff) await staffActor(tx,req);
       const tripRow=await tx.get('SELECT * FROM trips WHERE id=?'+lock,[initial.trip_id]);
       const row=await tx.get('SELECT * FROM bookings WHERE code=?'+lock,[code]);
       if (row.trip_id !== initial.trip_id) fail(409,'Vé vừa được đổi chuyến. Vui lòng tải lại.','CONFLICT');
       await expire(tx,initial.trip_id);
       const booking=await getBooking(code,tx);
-      if (staff) scope(req,tripRow.operator_id); else if (!bookingOwner(req,booking)) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
+      if (staff) scope(req,booking.trip?.operatorId || tripRow.operator_id); else if (!bookingOwner(req,booking)) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
       if (['cancelled','expired','refund_pending'].includes(booking.status)) return booking;
       if (!staff && new Date(tripRow.departure_at).getTime()<=Date.now()+2*3600000) fail(409,'Vé chỉ được hủy trước giờ khởi hành ít nhất 2 giờ.','CANCELLATION_CLOSED');
       const paid=row.payment_status === 'paid';
@@ -322,6 +332,7 @@ async function createApi(options={}) {
       await tx.run('DELETE FROM reserved_seats WHERE booking_code=?',[code]);
       await features.releasePromotion(tx,code);
       await audit(tx,code,req.user?.id || 'guest',paid ? 'refund_requested' : 'cancelled');
+      if (staff) await adminAudit(tx,req,'booking_cancelled','booking',code,booking.trip?.operatorId || tripRow.operator_id,{status:paid ? 'refund_pending' : 'cancelled',total:booking.total});
       return getBooking(code,tx);
     });
   }
@@ -389,71 +400,84 @@ async function createApi(options={}) {
 
   router.use('/admin',requireStaff);
   features.installAdmin(router);
+  router.get('/admin/audit',endpoint(async (req,res) => {
+    const {page,limit}=pageArgs(req.query),range=dateRange(req.query,fail),clauses=[],args=[];
+    if (req.user.role==='operator') {clauses.push('e.operator_id=?');args.push(req.user.operatorId || '');}
+    for (const [param,column] of [['actor','actor_id'],['action','action'],['entityType','entity_type'],['entityId','entity_id'],['operator','operator_id']]) if (req.query[param]) {clauses.push('e.'+column+'=?');args.push(clean(req.query[param]));}
+    addDateClauses(clauses,args,'e.created_at',range);
+    if (req.query.q) {const search='%'+clean(req.query.q,100).toLocaleLowerCase('vi')+'%',lower=db.dialect==='postgres' ? 'LOWER' : 'vi_lower';clauses.push('('+lower+'(e.actor_name) LIKE ? OR '+lower+'(e.entity_id) LIKE ? OR '+lower+'(e.action) LIKE ?)');args.push(search,search,search);}
+    const where=clauses.length ? ' WHERE '+clauses.join(' AND ') : '',count=await db.get('SELECT COUNT(*) AS n FROM admin_audit_events e'+where,args);
+    const rows=await db.all('SELECT e.* FROM admin_audit_events e'+where+' ORDER BY e.created_at DESC,e.id DESC LIMIT ? OFFSET ?',[...args,limit,(page-1)*limit]);
+    res.json({events:rows.map(row=>({id:row.id,actorId:row.actor_id,actorName:row.actor_name,actorRole:row.actor_role,action:row.action,entityType:row.entity_type,entityId:row.entity_id,operatorId:row.operator_id,createdAt:row.created_at,data:parse(row.data)})),total:Number(count.n),page,pages:Math.ceil(Number(count.n)/limit)});
+  }));
   router.get('/admin/users',requireAdmin,endpoint(async (req,res) => {
     const rows=await db.all('SELECT * FROM users ORDER BY created_at DESC LIMIT 1000'); res.json({users:rows.map(safeUser)});
   }));
-  async function validateStaff(input,current={}) {
+  async function validateStaff(input,current={},tx=db) {
+    if (input.active!==undefined && typeof input.active!=='boolean') fail(400,'Trạng thái hoạt động phải là true hoặc false.');
     const fullName=clean(input.fullName ?? current.full_name,100),email=clean(input.email ?? current.email,254).toLowerCase(),mobile=phone(input.phone ?? current.phone);
     const role=input.role ?? current.role ?? 'operator',operatorId=role === 'operator' ? clean(input.operatorId ?? current.operator_id) : null;
     if (fullName.length<2 || !validEmail(email) || !validPhone(mobile)) fail(400,'Họ tên, email và số điện thoại không hợp lệ.');
     if (!['customer','operator'].includes(role)) fail(400,'Chỉ được tạo khách hàng hoặc nhân viên nhà xe.');
-    if (role === 'operator' && !(current.id && input.active === false && operatorId === current.operator_id) && !await db.get('SELECT id FROM operators WHERE id=? AND active=1',[operatorId])) fail(400,'Cần chọn nhà xe đang hoạt động cho tài khoản nhân viên.');
+    if (role === 'operator' && !(current.id && input.active === false && operatorId === current.operator_id) && !await tx.get('SELECT id FROM operators WHERE id=? AND active=1'+(tx===db ? '' : lock),[operatorId])) fail(400,'Cần chọn nhà xe đang hoạt động cho tài khoản nhân viên.');
     if ((!current.id || input.password !== undefined) && !passwordValid(input.password)) fail(400,'Mật khẩu cần ít nhất 10 ký tự, có chữ hoa, chữ thường và chữ số.');
     return {id:current.id || crypto.randomUUID(),fullName,email,phone:mobile,role,operatorId,active:input.active === undefined ? current.active !== 0 : Boolean(input.active),passwordHash:input.password !== undefined ? await bcrypt.hash(input.password,12) : current.password_hash};
   }
   router.post('/admin/users',requireAdmin,endpoint(async (req,res) => {
     const user=await validateStaff(req.body);
-    await db.transaction(tx => tx.run('INSERT INTO users(id,full_name,email,phone,password_hash,role,operator_id,verified,active,created_at) VALUES(?,?,?,?,?,?,?,1,?,?)',[user.id,user.fullName,user.email,user.phone,user.passwordHash,user.role,user.operatorId,user.active ? 1 : 0,nowISO()]));
+    await db.transaction(async tx => {await staffActor(tx,req);if(req.user.role!=='admin')fail(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN');if(user.role==='operator' && !await tx.get('SELECT id FROM operators WHERE id=? AND active=1'+lock,[user.operatorId]))fail(400,'Cần chọn nhà xe đang hoạt động cho tài khoản nhân viên.');await tx.run('INSERT INTO users(id,full_name,email,phone,password_hash,role,operator_id,verified,active,created_at) VALUES(?,?,?,?,?,?,?,1,?,?)',[user.id,user.fullName,user.email,user.phone,user.passwordHash,user.role,user.operatorId,user.active ? 1 : 0,nowISO()]);await adminAudit(tx,req,'user_created','user',user.id,null,{role:user.role,operatorId:user.operatorId,active:user.active});});
     res.status(201).json({user:safeUser(await db.get('SELECT * FROM users WHERE id=?',[user.id]))});
   }));
   router.patch('/admin/users/:id',requireAdmin,endpoint(async (req,res) => {
-    const current=await db.get('SELECT * FROM users WHERE id=?',[req.params.id]); if (!current) fail(404,'Không tìm thấy tài khoản.','NOT_FOUND');
-    if (current.role === 'admin') fail(403,'Tài khoản quản trị được cấu hình riêng và không được thay đổi tại chức năng này.','FORBIDDEN');
-    const user=await validateStaff(req.body,current);
-    await db.transaction(tx => tx.run('UPDATE users SET full_name=?,email=?,phone=?,password_hash=?,role=?,operator_id=?,active=?,auth_version=auth_version+1 WHERE id=?',[user.fullName,user.email,user.phone,user.passwordHash,user.role,user.operatorId,user.active ? 1 : 0,user.id]));
-    res.json({user:safeUser(await db.get('SELECT * FROM users WHERE id=?',[user.id]))});
+    const user=await db.transaction(async tx => {
+      await staffActor(tx,req);if(req.user.role!=='admin')fail(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN');
+      const current=await tx.get('SELECT * FROM users WHERE id=?'+lock,[req.params.id]);if(!current)fail(404,'Không tìm thấy tài khoản.','NOT_FOUND');
+      if(current.role==='admin')fail(403,'Tài khoản quản trị được cấu hình riêng và không được thay đổi tại chức năng này.','FORBIDDEN');
+      const user=await validateStaff(req.body,current,tx);await tx.run('UPDATE users SET full_name=?,email=?,phone=?,password_hash=?,role=?,operator_id=?,active=?,auth_version=auth_version+1 WHERE id=?',[user.fullName,user.email,user.phone,user.passwordHash,user.role,user.operatorId,user.active ? 1 : 0,user.id]);
+      await adminAudit(tx,req,'user_updated','user',user.id,null,{role:user.role,operatorId:user.operatorId,active:user.active,passwordChanged:req.body.password!==undefined});return user;
+    });res.json({user:safeUser(await db.get('SELECT * FROM users WHERE id=?',[user.id]))});
   }));
   router.get('/admin/stats',endpoint(async (req,res) => {
-    const scoped=req.user.role === 'operator',where=scoped ? ' WHERE operator_id=?' : '',args=scoped ? [req.user.operatorId || ''] : [];
-    const counts=await db.get("SELECT COUNT(*) AS trips,SUM(CASE WHEN source='managed' THEN 1 ELSE 0 END) AS managed,SUM(CASE WHEN source='demo' THEN 1 ELSE 0 END) AS demo FROM trips"+where,args);
-    const bookings=await db.get("SELECT COUNT(*) AS bookings,SUM(CASE WHEN b.payment_status='paid' THEN b.total ELSE 0 END) AS revenue,SUM(CASE WHEN b.status IN ('pending_payment','reserved') THEN 1 ELSE 0 END) AS pending FROM bookings b JOIN trips t ON t.id=b.trip_id"+(scoped ? ' WHERE t.operator_id=?' : ''),args);
-    const op=await db.get('SELECT COUNT(*) AS n FROM operators'+(scoped ? ' WHERE id=?' : ''),args);
-    res.json({stats:{trips:Number(counts.trips),managedTrips:Number(counts.managed || 0),demoTrips:Number(counts.demo || 0),operators:Number(op.n),bookings:Number(bookings.bookings),revenue:Number(bookings.revenue || 0),pendingBookings:Number(bookings.pending || 0)},dataMode:await mode(),paymentMethods});
+    await refreshExpired();res.json(await adminStats({db,user:req.user,query:req.query,fail,paymentMethods,dataMode:await mode()}));
   }));
+  router.post('/admin/bookings',endpoint(async(req,res)=>{const result=await features.checkout(req,[req.body],{staff:true});res.status(201).json({booking:result.bookings[0]});}));
   router.get('/admin/trips',endpoint(async (req,res) => res.json(await tripSearch(req.query,req,true))));
   router.get('/admin/operators',endpoint(async (req,res) => {
     const rows=await db.all('SELECT * FROM operators'+(req.user.role === 'operator' ? ' WHERE id=?' : '')+' ORDER BY name',req.user.role === 'operator' ? [req.user.operatorId || ''] : []);
     res.json({operators:rows.map(r => ({...parse(r.data),active:r.active === 1}))});
   }));
   function operatorData(input,current={}) {
+    if (input.active!==undefined && typeof input.active!=='boolean') fail(400,'Trạng thái hoạt động phải là true hoặc false.');
     const name=clean(input.name ?? current.name,120); if (name.length<2) fail(400,'Tên nhà xe cần ít nhất 2 ký tự.');
     const image=clean(input.image ?? current.image ?? '/images/chuyenxe/hoang-anh-1.jpg',500);
     if (!/^\/images\/[a-zA-Z0-9_\-/.]+$/.test(image)) fail(400,'Ảnh nhà xe phải là ảnh cục bộ trong /images/.');
-    return {...current,id:current.id || 'op-'+crypto.randomUUID(),name,phone:phone(input.phone ?? current.phone),email:clean(input.email ?? current.email,254).toLowerCase(),
+    const mobile=phone(input.phone ?? current.phone),email=clean(input.email ?? current.email,254).toLowerCase();if((mobile && !validPhone(mobile)) || (email && !validEmail(email)))fail(400,'Số điện thoại hoặc email nhà xe không hợp lệ.');
+    return {...current,id:current.id || 'op-'+crypto.randomUUID(),name,phone:mobile,email,
       description:clean(input.description ?? current.description,2000),image,rating:current.rating || 0,reviewCount:current.reviewCount || 0,source:current.source || 'managed',active:input.active === undefined ? current.active !== false : Boolean(input.active)};
   }
   router.post('/admin/operators',requireAdmin,endpoint(async (req,res) => {
-    const op=operatorData(req.body); await db.transaction(tx => tx.run('INSERT INTO operators(id,name,data,active) VALUES(?,?,?,?)',[op.id,op.name,json(op),op.active ? 1 : 0])); res.status(201).json({operator:op});
+    const op=operatorData(req.body);await db.transaction(async tx=>{await staffActor(tx,req);if(req.user.role!=='admin')fail(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN');await tx.run('INSERT INTO operators(id,name,data,active) VALUES(?,?,?,?)',[op.id,op.name,json(op),op.active ? 1 : 0]);await adminAudit(tx,req,'operator_created','operator',op.id,op.id,{name:op.name,active:op.active});});res.status(201).json({operator:op});
   }));
   router.patch('/admin/operators/:id',endpoint(async (req,res) => {
-    scope(req,req.params.id); const row=await db.get('SELECT data,active FROM operators WHERE id=?',[req.params.id]); if (!row) fail(404,'Không tìm thấy nhà xe.','NOT_FOUND');
-    const op=operatorData(req.body,{...parse(row.data),active:row.active === 1}); await db.transaction(tx => tx.run('UPDATE operators SET name=?,data=?,active=? WHERE id=?',[op.name,json(op),op.active ? 1 : 0,op.id])); res.json({operator:op});
+    const op=await db.transaction(async tx=>{await staffActor(tx,req);scope(req,req.params.id);const row=await tx.get('SELECT data,active FROM operators WHERE id=?'+lock,[req.params.id]);if(!row)fail(404,'Không tìm thấy nhà xe.','NOT_FOUND');const op=operatorData(req.body,{...parse(row.data),active:row.active===1});if(req.user.role!=='admin' && op.active!==(row.active===1))fail(403,'Chỉ quản trị viên được bật hoặc ngừng hoạt động nhà xe.','FORBIDDEN');await tx.run('UPDATE operators SET name=?,data=?,active=? WHERE id=?',[op.name,json(op),op.active ? 1 : 0,op.id]);await adminAudit(tx,req,'operator_updated','operator',op.id,op.id,{name:op.name,active:op.active});return op;});res.json({operator:op});
   }));
   router.delete('/admin/operators/:id',requireAdmin,endpoint(async (req,res) => {
-    const id=req.params.id; if (!await db.get('SELECT id FROM operators WHERE id=?',[id])) fail(404,'Không tìm thấy nhà xe.','NOT_FOUND');
-    await db.transaction(tx => tx.run('UPDATE operators SET active=0 WHERE id=?',[id])); res.json({message:'Nhà xe đã ngừng mở bán; dữ liệu lịch sử được giữ lại.'});
+    const id=req.params.id;await db.transaction(async tx=>{await staffActor(tx,req);if(req.user.role!=='admin')fail(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN');if(!await tx.get('SELECT id FROM operators WHERE id=?'+lock,[id]))fail(404,'Không tìm thấy nhà xe.','NOT_FOUND');await tx.run('UPDATE operators SET active=0 WHERE id=?',[id]);await adminAudit(tx,req,'operator_deactivated','operator',id,id);});res.json({message:'Nhà xe đã ngừng mở bán; dữ liệu lịch sử được giữ lại.'});
   }));
   async function validateTrip(input,current={},tx=db) {
+    if (!input || typeof input!=='object' || Array.isArray(input)) fail(400,'Dữ liệu chuyến xe phải là một đối tượng.');
+    if (input.active!==undefined && typeof input.active!=='boolean') fail(400,'Trạng thái hoạt động phải là true hoặc false.');
     const operatorId=clean(input.operatorId ?? current.operatorId),from=clean(input.from ?? current.from),to=clean(input.to ?? current.to);
-    const opRow=await tx.get('SELECT * FROM operators WHERE id=?',[operatorId]);
+    const opRow=await tx.get('SELECT * FROM operators WHERE id=?'+(tx===db ? '' : lock),[operatorId]);
     if (!opRow || !opRow.active) fail(400,'Nhà xe không hợp lệ hoặc đã ngừng hoạt động.');
     if (current.source !== 'demo' && parse(opRow.data).source === 'demo') fail(400,'Cần tạo nhà xe vận hành thật trước khi nhập kho vé thật. Nhà xe mẫu không được dùng làm nguồn bán thật.');
     const [origin,destination]=await Promise.all([tx.get('SELECT * FROM locations WHERE id=?',[from]),tx.get('SELECT * FROM locations WHERE id=?',[to])]);
     if (!origin || !destination || from === to) fail(400,'Điểm đi và điểm đến phải hợp lệ và khác nhau.');
-    const date=clean(input.date ?? current.date,10),departureTime=clean(input.departureTime ?? current.departureTime,5);
+    const date=clean(input.date ?? current.date),departureTime=clean(input.departureTime ?? current.departureTime);
     if (!validDate(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(departureTime)) fail(400,'Ngày hoặc giờ khởi hành không hợp lệ.');
-    if (date < todayVietnam() || date > addDays(todayVietnam(),365)) fail(400,'Ngày mở bán cần trong 365 ngày tới.');
-    if (new Date(date+'T'+departureTime+':00+07:00').getTime()<=Date.now()+BOOKING_LEAD_MINUTES*60000) fail(400,'Giờ khởi hành cần cách hiện tại ít nhất '+BOOKING_LEAD_MINUTES+' phút.');
+    const scheduleChanged=!current.id || date!==current.date || departureTime!==current.departureTime || (input.active===true && current.active===false);
+    if (scheduleChanged && (date < todayVietnam() || date > addDays(todayVietnam(),365))) fail(400,'Ngày mở bán cần trong 365 ngày tới.');
+    if (scheduleChanged && new Date(date+'T'+departureTime+':00+07:00').getTime()<=Date.now()+BOOKING_LEAD_MINUTES*60000) fail(400,'Giờ khởi hành cần cách hiện tại ít nhất '+BOOKING_LEAD_MINUTES+' phút.');
     const type=busTypes.find(t => t.id === (input.type ?? current.type)); if (!type) fail(400,'Loại xe không hợp lệ.');
     const price=Number(input.price ?? current.price),totalSeats=Number(input.totalSeats ?? current.totalSeats ?? type.seats),durationMinutes=Number(input.durationMinutes ?? current.durationMinutes);
     if (!Number.isSafeInteger(price) || price<10000 || price>10000000 || !Number.isInteger(totalSeats) || totalSeats<1 || totalSeats>60 || !Number.isInteger(durationMinutes) || durationMinutes<30 || durationMinutes>2880) fail(400,'Giá vé, số ghế hoặc thời gian hành trình không hợp lệ.');
@@ -474,12 +498,13 @@ async function createApi(options={}) {
       arrivalTime:String(Math.floor(arrival/60)).padStart(2,'0')+':'+String(arrival%60).padStart(2,'0'),arrivalDate:addDays(date,Math.floor((departureMinutes+durationMinutes)/1440)),
       image:op.image,seatPrices,source:current.source === 'demo' ? 'demo' : 'managed',provenance,active:input.active === undefined ? current.active !== false : Boolean(input.active)};
   }
-  async function insertManaged(req,input) { const trip=await validateTrip(input); scope(req,trip.operatorId); return trip; }
+  async function insertManaged(req,input,tx=db) { const trip=await validateTrip(input,{},tx); scope(req,trip.operatorId); return trip; }
   router.post('/admin/trips',endpoint(async (req,res) => {
-    const trip=await insertManaged(req,req.body); await db.transaction(tx => tx.run(INSERT_TRIP,tripToRow(trip))); res.status(201).json({trip:await getTrip(trip.id)});
+    const trip=await db.transaction(async tx=>{await staffActor(tx,req);const trip=await insertManaged(req,req.body,tx);await tx.run(INSERT_TRIP,tripToRow(trip));await adminAudit(tx,req,'trip_created','trip',trip.id,trip.operatorId,{date:trip.date,departureTime:trip.departureTime,from:trip.from,to:trip.to,price:trip.price,totalSeats:trip.totalSeats});return trip;});res.status(201).json({trip:await getTrip(trip.id)});
   }));
   router.patch('/admin/trips/:id',endpoint(async (req,res) => {
     await db.transaction(async tx => {
+      await staffActor(tx,req);
       const row=await tx.get('SELECT id FROM trips WHERE id=?'+lock,[req.params.id]);if(!row)fail(404,'Không tìm thấy chuyến xe.','NOT_FOUND');
       const current=await getTrip(req.params.id,tx);scope(req,current.operatorId);
       const trip=await validateTrip(req.body,current,tx);scope(req,trip.operatorId);
@@ -487,39 +512,35 @@ async function createApi(options={}) {
       const booked=await tx.get('SELECT (SELECT COUNT(*) FROM reserved_seats WHERE trip_id=?) + (SELECT COUNT(*) FROM hold_seats WHERE trip_id=?) AS n',[trip.id,trip.id]);
       if (Number(booked.n) && ['operatorId','from','to','date','departureTime','type','totalSeats','price','seatPrices','durationMinutes','pickupPoints','dropoffPoints'].some(k => json(current[k] ?? (k === 'seatPrices' ? {} : undefined)) !== json(trip[k]))) fail(409,'Chuyến đã có khách; không được đổi lịch, giá, tuyến hoặc sơ đồ ghế.','HAS_BOOKINGS');
       const values=tripToRow(trip); await tx.run('UPDATE trips SET operator_id=?,from_id=?,to_id=?,date=?,departure_time=?,departure_at=?,price=?,total_seats=?,type=?,active=?,source=?,data=? WHERE id=?',[...values.slice(1),trip.id]);
+      await adminAudit(tx,req,'trip_updated','trip',trip.id,trip.operatorId,{changedFields:Object.keys(req.body).filter(key=>json(current[key])!==json(trip[key])),active:trip.active});
     });
     res.json({trip:await getTrip(req.params.id)});
   }));
   router.delete('/admin/trips/:id',endpoint(async (req,res) => {
-    await db.transaction(async tx => {const row=await tx.get('SELECT id,operator_id FROM trips WHERE id=?'+lock,[req.params.id]);if(!row)fail(404,'Không tìm thấy chuyến xe.','NOT_FOUND');scope(req,row.operator_id);await tx.run('UPDATE trips SET active=0 WHERE id=?',[row.id]);});
+    await db.transaction(async tx => {await staffActor(tx,req);const row=await tx.get('SELECT id,operator_id FROM trips WHERE id=?'+lock,[req.params.id]);if(!row)fail(404,'Không tìm thấy chuyến xe.','NOT_FOUND');scope(req,row.operator_id);await tx.run('UPDATE trips SET active=0 WHERE id=?',[row.id]);await adminAudit(tx,req,'trip_deactivated','trip',row.id,row.operator_id);});
     res.json({message:'Chuyến đã ngừng mở bán. Đặt chỗ hiện có vẫn được giữ; liên hệ khách nếu thay đổi lịch.'});
   }));
   router.post('/admin/trips/:id/duplicate',endpoint(async (req,res) => {
-    const current=await getTrip(req.params.id); if (!current) fail(404,'Không tìm thấy chuyến xe.','NOT_FOUND'); scope(req,current.operatorId);
-    const copy={...current,...req.body}; delete copy.id;
-    if (current.source === 'demo') copy.provenance='Bản sao mẫu: '+current.provenance;
-    const trip=await validateTrip(copy,{source:current.source}); scope(req,trip.operatorId);
-    await db.transaction(tx => tx.run(INSERT_TRIP,tripToRow(trip))); res.status(201).json({trip:await getTrip(trip.id)});
+    const trip=await db.transaction(async tx=>{await staffActor(tx,req);const row=await tx.get('SELECT id FROM trips WHERE id=?'+lock,[req.params.id]);if(!row)fail(404,'Không tìm thấy chuyến xe.','NOT_FOUND');const current=await getTrip(row.id,tx);scope(req,current.operatorId);const copy={...current,...req.body};delete copy.id;if(current.source==='demo')copy.provenance='Bản sao mẫu: '+current.provenance;const trip=await validateTrip(copy,{source:current.source},tx);scope(req,trip.operatorId);await tx.run(INSERT_TRIP,tripToRow(trip));await adminAudit(tx,req,'trip_duplicated','trip',trip.id,trip.operatorId,{fromTrip:current.id,date:trip.date,departureTime:trip.departureTime,from:trip.from,to:trip.to,price:trip.price,totalSeats:trip.totalSeats});return trip;});res.status(201).json({trip:await getTrip(trip.id)});
   }));
   router.post('/admin/import',endpoint(async (req,res) => {
     if (req.body.source !== 'operator' || clean(req.body.sourceReference,2000).length<5) fail(400,'Cần source=operator và sourceReference chỉ rõ nguồn được nhà xe xác nhận.');
     if (req.body.csv !== undefined) {try {req.body.trips=parseCsv(req.body.csv);} catch (error) {fail(400,error.message);}}
     if (!Array.isArray(req.body.trips) || req.body.trips.length<1 || req.body.trips.length>500) fail(400,'Chỉ nhập từ 1 đến 500 chuyến mỗi lần.');
-    const trips=[];
-    for (let index=0; index<req.body.trips.length; index++) {
-      try { const trip=await insertManaged(req,{...req.body.trips[index],provenance:req.body.sourceReference}); trips.push(trip); }
-      catch (error) { if (error instanceof ApiError) error.message='Dòng '+(index+1)+': '+error.message; throw error; }
-    }
-    await db.transaction(async tx => { for (const trip of trips) await tx.run(INSERT_TRIP,tripToRow(trip)); });
+    const trips=await db.transaction(async tx=>{await staffActor(tx,req);const trips=[];for(let index=0;index<req.body.trips.length;index++){try{const input=req.body.trips[index];if(!input || typeof input!=='object' || Array.isArray(input))fail(400,'Dữ liệu chuyến xe phải là một đối tượng.');trips.push(await insertManaged(req,{...input,provenance:req.body.sourceReference},tx));}catch(error){if(error instanceof ApiError)error.message='Dòng '+(index+1)+': '+error.message;throw error;}}for(const trip of trips)await tx.run(INSERT_TRIP,tripToRow(trip));for(const opId of new Set(trips.map(trip=>trip.operatorId))){const owned=trips.filter(trip=>trip.operatorId===opId);await adminAudit(tx,req,'trips_imported','import',crypto.randomUUID(),opId,{count:owned.length,tripIds:owned.map(trip=>trip.id),sourceReference:clean(req.body.sourceReference,2000)});}return trips;});
     res.status(201).json({imported:trips.length,trips:trips.map(t => ({id:t.id,operatorId:t.operatorId,date:t.date,source:t.source}))});
   }));
   router.get('/admin/bookings',endpoint(async (req,res) => {
     await refreshExpired(); const {page,limit}=pageArgs(req.query),clauses=[],args=[];
-    if (req.user.role === 'operator') { clauses.push('t.operator_id=?'); args.push(req.user.operatorId || ''); }
+    if (req.user.role === 'operator') { clauses.push(bookingTripField(db,'operatorId','t.operator_id')+'=?'); args.push(req.user.operatorId || ''); }
     if (req.query.status) { clauses.push('b.status=?'); args.push(clean(req.query.status)); }
+    if (req.query.paymentStatus) {clauses.push('b.payment_status=?');args.push(clean(req.query.paymentStatus));}
+    if (req.query.operator) {clauses.push(bookingTripField(db,'operatorId','t.operator_id')+'=?');args.push(clean(req.query.operator));}
+    if (req.query.tripId) {clauses.push('b.trip_id=?');args.push(clean(req.query.tripId));}
     if (req.query.code) { clauses.push('b.code=?'); args.push(clean(req.query.code).toUpperCase()); }
     if (req.query.q) { clauses.push('(b.code LIKE ? OR b.phone LIKE ? OR LOWER(b.email) LIKE ?)'); args.push('%'+clean(req.query.q,60).toUpperCase()+'%','%'+clean(req.query.q,60)+'%','%'+clean(req.query.q,60).toLowerCase()+'%'); }
     if (req.query.date) { if (!validDate(req.query.date)) fail(400,'Ngày đặt vé không hợp lệ.'); clauses.push('b.created_at>=? AND b.created_at<?'); args.push(new Date(req.query.date+'T00:00:00+07:00').toISOString(),new Date(addDays(req.query.date,1)+'T00:00:00+07:00').toISOString()); }
+    addDateClauses(clauses,args,'b.created_at',dateRange(req.query,fail));
     const where=clauses.length ? ' WHERE '+clauses.join(' AND ') : '';
     const count=await db.get('SELECT COUNT(*) AS n FROM bookings b JOIN trips t ON t.id=b.trip_id'+where,args);
     const rows=await db.all('SELECT b.code FROM bookings b JOIN trips t ON t.id=b.trip_id'+where+' ORDER BY b.created_at DESC LIMIT ? OFFSET ?',[...args,limit,(page-1)*limit]);
@@ -530,48 +551,59 @@ async function createApi(options={}) {
     const code=clean(req.params.code,30).toUpperCase();
     if (req.body.status === 'cancelled') return res.json({booking:await cancelBooking(req,code,true)});
     if (req.body.status !== 'confirmed') fail(400,'Chỉ hỗ trợ xác nhận hoặc hủy. Ghi nhận tiền qua biên nhận thu tiền hoặc IPN hợp lệ.');
-    const initial=await getBooking(code); if (!initial) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND'); scope(req,initial.trip.operatorId);
+    const initial=await getBooking(code); if (!initial) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
     await db.transaction(async tx => {
-      await tx.get('SELECT id FROM trips WHERE id=?'+lock,[initial.tripId]);
+      await staffActor(tx,req);const tripRow=await tx.get('SELECT id,operator_id FROM trips WHERE id=?'+lock,[initial.tripId]);
       await expire(tx,initial.tripId);
       const row=await tx.get('SELECT * FROM bookings WHERE code=?'+lock,[code]);
+      const bookingOperatorId=parse(row.data).trip?.operatorId || tripRow.operator_id;scope(req,bookingOperatorId);
+      if(row.trip_id!==initial.tripId)fail(409,'Vé vừa được đổi chuyến. Vui lòng tải lại.','CONFLICT');
       if (!['reserved','confirmed'].includes(row.status)) fail(409,'Đặt chỗ không thể xác nhận ở trạng thái này.','INVALID_TRANSITION');
+      if(row.status==='confirmed')return;
       await tx.run("UPDATE bookings SET status='confirmed' WHERE code=?",[code]);
       await audit(tx,code,req.user.id,'operator_confirmed');
+      await adminAudit(tx,req,'booking_confirmed','booking',code,bookingOperatorId,{status:'confirmed',total:row.total});
     }); res.json({booking:await getBooking(code)});
   }));
   router.post('/admin/bookings/:code/cash-receipt',endpoint(async (req,res) => {
     const code=clean(req.params.code,30).toUpperCase(),reference=clean(req.body.reference,100);
     if (reference.length<5) fail(400,'Cần mã biên nhận thu tiền thực tế dài ít nhất 5 ký tự.');
-    const initial=await getBooking(code); if (!initial) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND'); scope(req,initial.trip.operatorId);
+    const initial=await getBooking(code); if (!initial) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
     await db.transaction(async tx => {
-      await tx.get('SELECT id FROM trips WHERE id=?'+lock,[initial.tripId]);
+      await staffActor(tx,req);const tripRow=await tx.get('SELECT id,operator_id FROM trips WHERE id=?'+lock,[initial.tripId]);
       const row=await tx.get('SELECT * FROM bookings WHERE code=?'+lock,[code]);
+      const bookingOperatorId=parse(row.data).trip?.operatorId || tripRow.operator_id;scope(req,bookingOperatorId);
+      if(row.trip_id!==initial.tripId)fail(409,'Vé vừa được đổi chuyến. Vui lòng tải lại.','CONFLICT');
       if (row.payment_method !== 'cash' || !['reserved','confirmed'].includes(row.status) || row.payment_status !== 'pending') fail(409,'Đặt chỗ không đủ điều kiện ghi nhận thu tiền.','INVALID_TRANSITION');
+      if(req.body.amount!==undefined && (!Number.isSafeInteger(Number(req.body.amount)) || Number(req.body.amount)!==row.total))fail(400,'Số tiền biên nhận phải đúng số tiền cần thanh toán.');
       const receipt='cash:'+reference;
       if (await tx.get('SELECT reference FROM payments WHERE reference=?',[receipt])) fail(409,'Mã biên nhận đã được dùng.','DUPLICATE_RECEIPT');
       await tx.run('INSERT INTO payments(reference,booking_code,provider,amount,status,created_at,data) VALUES(?,?,?,?,?,?,?)',[receipt,code,'cash',row.total,'paid',nowISO(),json({actor:req.user.id,reference})]);
       await tx.run("UPDATE bookings SET payment_status='paid',status='confirmed' WHERE code=?",[code]);
       await audit(tx,code,req.user.id,'cash_received',{reference,amount:row.total});
+      await adminAudit(tx,req,'cash_received','booking',code,bookingOperatorId,{reference,amount:row.total});
     }); res.json({booking:await getBooking(code)});
   }));
   router.post('/admin/bookings/:code/refund-receipt',endpoint(async (req,res) => {
     const code=clean(req.params.code,30).toUpperCase(),reference=clean(req.body.reference,100),amount=Number(req.body.amount);
     if (reference.length<5 || !Number.isSafeInteger(amount) || amount<=0) fail(400,'Cần mã biên nhận hoàn tiền thực tế và số tiền nguyên hợp lệ.');
-    const initial=await getBooking(code); if (!initial) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND'); scope(req,initial.trip.operatorId);
+    const initial=await getBooking(code); if (!initial) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
     await db.transaction(async tx => {
-      await tx.get('SELECT id FROM trips WHERE id=?'+lock,[initial.tripId]);
+      await staffActor(tx,req);const tripRow=await tx.get('SELECT id,operator_id FROM trips WHERE id=?'+lock,[initial.tripId]);
       const row=await tx.get('SELECT * FROM bookings WHERE code=?'+lock,[code]);
+      const bookingOperatorId=parse(row.data).trip?.operatorId || tripRow.operator_id;scope(req,bookingOperatorId);
+      if(row.trip_id!==initial.tripId)fail(409,'Vé vừa được đổi chuyến. Vui lòng tải lại.','CONFLICT');
       if (row.status !== 'refund_pending' || row.payment_status !== 'refund_pending' || amount !== row.total) fail(409,'Chỉ ghi nhận hoàn đủ số tiền cho vé đang chờ hoàn tiền.','INVALID_TRANSITION');
       const receipt='refund:'+reference;
       if (await tx.get('SELECT reference FROM payments WHERE reference=?',[receipt])) fail(409,'Mã biên nhận đã được dùng.','DUPLICATE_RECEIPT');
       await tx.run('INSERT INTO payments(reference,booking_code,provider,amount,status,created_at,data) VALUES(?,?,?,?,?,?,?)',[receipt,code,'manual_refund',amount,'refunded',nowISO(),json({actor:req.user.id,reference})]);
       await tx.run("UPDATE bookings SET payment_status='refunded',status='cancelled' WHERE code=?",[code]);
       await audit(tx,code,req.user.id,'refund_recorded',{reference,amount});
+      await adminAudit(tx,req,'refund_recorded','booking',code,bookingOperatorId,{reference,amount});
     }); res.json({booking:await getBooking(code)});
   }));
   router.get('/admin/bookings/:code/events',endpoint(async (req,res) => {
-    const booking=await getBooking(req.params.code); if (!booking) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND'); scope(req,booking.trip.operatorId);
+    const booking=await getBooking(clean(req.params.code,30).toUpperCase()); if (!booking) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');scope(req,booking.trip?.operatorId || (await db.get('SELECT operator_id FROM trips WHERE id=?',[booking.tripId])).operator_id);
     const events=await db.all('SELECT * FROM booking_events WHERE booking_code=? ORDER BY created_at',[booking.code]); res.json({events:events.map(e => ({...e,data:parse(e.data)}))});
   }));
   router.use((error,req,res,next) => {

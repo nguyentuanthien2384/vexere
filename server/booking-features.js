@@ -5,7 +5,7 @@ const {makeSeats}=require('./catalog');
 const BOOKING_LEAD_MINUTES=30;
 
 function createBookingFeatures(ctx) {
-  const {db,env,fail,endpoint,clean,phone,validPhone,validEmail,getTrip,getBooking,bookingOwner,audit,expire,refreshExpired,requireUser,requireAdmin,scope}=ctx;
+  const {db,env,fail,endpoint,clean,phone,validPhone,validEmail,getTrip,getBooking,bookingOwner,audit,adminAudit,staffActor,expire,refreshExpired,requireUser,requireAdmin,scope}=ctx;
   const lock=db.dialect === 'postgres' ? ' FOR UPDATE' : '';
   const now=() => new Date().toISOString();
   const parse=value => typeof value === 'string' ? JSON.parse(value) : value;
@@ -114,19 +114,23 @@ function createBookingFeatures(ctx) {
     return {...info,code:row.code,userId:row.user_id,phone:row.phone,email:row.email,subtotal:row.subtotal,discount:row.discount,total:row.total,couponCode:row.coupon_code,
       createdAt:row.created_at,status,activeTotal:active.reduce((sum,b) => sum+b.total,0),bookings};
   }
-  async function checkout(req,inputs,{asOrder=false}={}) {
+  async function checkout(req,inputs,{asOrder=false,staff=false}={}) {
+    if(staff && req.body.paymentMethod===undefined)req.body={...req.body,paymentMethod:'cash'};
     const input=req.body,fullName=clean(input.fullName,100),email=clean(input.email,254).toLowerCase(),mobile=phone(input.phone);
-    if (fullName.length<2 || !validEmail(email) || !validPhone(mobile)) fail(400,'Thông tin hành khách không hợp lệ.');
+    if (fullName.length<2 || (!(staff && !email) && !validEmail(email)) || !validPhone(mobile)) fail(400,'Thông tin hành khách không hợp lệ.');
     if (!['cash','vnpay'].includes(input.paymentMethod)) fail(400,'Phương thức thanh toán không hợp lệ.');
+    if(staff && (asOrder || input.paymentMethod!=='cash'))fail(400,'Bán vé tại quầy hiện hỗ trợ một chuyến, thanh toán tiền mặt.','PAYMENT_UNSUPPORTED');
     if (asOrder && input.paymentMethod !== 'cash') fail(400,'Đơn khứ hồi hiện hỗ trợ thanh toán tại nhà xe. Vui lòng chọn tiền mặt.','PAYMENT_UNSUPPORTED');
     if (input.paymentMethod === 'vnpay' && !ctx.payments.configured(env)) fail(503,'VNPAY chưa được cấu hình. Vui lòng chọn thanh toán tại nhà xe.','PAYMENT_UNAVAILABLE');
     if (!Array.isArray(inputs) || inputs.length !== (asOrder ? 2 : 1)) fail(400,'Số chuyến không hợp lệ.');
     inputs.forEach(validateLeg);
     const orderCode=asOrder ? newCode('T4O') : null,bookingCodes=inputs.map(() => newCode('T4T'));
     const result=await db.transaction(async tx => {
+      if(staff)await staffActor(tx,req);
       await lockTrips(tx,inputs.map(leg => clean(leg.tripId)));
       for (const tripId of [...new Set(inputs.map(leg => clean(leg.tripId)))].sort()) await expire(tx,tripId);
       const legs=[]; for (const leg of inputs) legs.push(await legInfo(tx,leg));
+      if(staff)for(const leg of legs)scope(req,leg.trip.operatorId);
       if (asOrder) roundTrip(legs);
       const prices=await quote(tx,legs,input.couponCode,mobile,{consume:true});
       const bookingItems=[],createdAt=now();
@@ -137,12 +141,13 @@ function createBookingFeatures(ctx) {
         const proportional=i === legs.length-1 ? prices.discount-allocated : Math.floor(prices.discount*leg.subtotal/prices.subtotal);
         const discount=Math.max(prices.discount-allocated-remainingCapacity,Math.min(leg.subtotal-1,proportional)); allocated+=discount;
         const expiresAt=input.paymentMethod === 'vnpay' ? new Date(Date.now()+15*60000).toISOString() : null,status=input.paymentMethod === 'vnpay' ? 'pending_payment' : 'reserved';
-        const item={code,tripId:leg.trip.id,userId:req.user?.id || null,fullName,email,phone:mobile,seats:leg.seats,pickup:leg.pickup,dropoff:leg.dropoff,paymentMethod:input.paymentMethod,
+        const item={code,tripId:leg.trip.id,userId:staff ? null : req.user?.id || null,...(staff ? {createdBy:req.user.id,channel:'counter'} : {}),fullName,email,phone:mobile,seats:leg.seats,pickup:leg.pickup,dropoff:leg.dropoff,paymentMethod:input.paymentMethod,
           paymentStatus:'pending',status,subtotal:leg.subtotal,discount,total:leg.subtotal-discount,couponCode:prices.couponCode,orderCode,createdAt,expiresAt,source:leg.trip.source,provenance:leg.trip.provenance || '',trip:leg.trip};
         await tx.run('INSERT INTO bookings(code,trip_id,user_id,phone,email,status,payment_status,payment_method,total,expires_at,created_at,data,order_code,promo_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[code,leg.trip.id,item.userId,mobile,email,status,'pending',input.paymentMethod,item.total,expiresAt,createdAt,JSON.stringify(item),orderCode,prices.couponCode]);
         if (leg.holdHash) await clearHold(tx,leg.holdHash);
         for (const seat of leg.seats) await tx.run('INSERT INTO reserved_seats(trip_id,seat,booking_code) VALUES(?,?,?)',[leg.trip.id,seat,code]);
         await audit(tx,code,req.user?.id || 'guest','created',{seats:leg.seats,source:leg.trip.source,orderCode,couponCode:prices.couponCode,discount});
+        if(staff)await adminAudit(tx,req,'counter_booking_created','booking',code,leg.trip.operatorId,{seats:leg.seats,total:item.total,channel:'counter'});
         bookingItems.push(item);
       }
       if (prices.couponCode) {
@@ -214,6 +219,7 @@ function createBookingFeatures(ctx) {
     router.post('/bookings/:code/reschedule',endpoint(async (req,res) => res.json({booking:await reschedule(req,false)})));
   }
   async function validatePromotion(input,current={}) {
+    for(const key of ['active','roundTripOnly'])if(input[key]!==undefined && typeof input[key]!=='boolean')fail(400,'Trạng thái '+key+' phải là true hoặc false.');
     const code=clean(current.code || input.code,32).toUpperCase(),title=clean(input.title ?? current.title,150),description=clean(input.description ?? current.description,2000),type=input.type ?? current.type ?? 'percentage',value=Number(input.value ?? current.value);
     if (!/^[A-Z0-9_-]{3,32}$/.test(code) || title.length<2 || !['percentage','fixed'].includes(type) || !Number.isSafeInteger(value) || value<1 || (type === 'percentage' && value>100) || (type === 'fixed' && value>100000000)) fail(400,'Mã, tên, kiểu hoặc mức ưu đãi không hợp lệ.');
     const p={...current,code,title,description,type,value,source:current.source || 'managed',active:input.active === undefined ? current.active !== false : Boolean(input.active),roundTripOnly:input.roundTripOnly === undefined ? Boolean(current.roundTripOnly) : Boolean(input.roundTripOnly)};
@@ -231,7 +237,9 @@ function createBookingFeatures(ctx) {
     if (staff) scope(req,initial.trip.operatorId);else if (!bookingOwner(req,initial)) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
     const targetId=clean(req.body.tripId),orderRows=initial.orderCode ? await db.all('SELECT trip_id FROM bookings WHERE order_code=?',[initial.orderCode]) : [];
     return db.transaction(async tx => {
-      await lockTrips(tx,[initial.tripId,targetId,...orderRows.map(row=>row.trip_id)]);
+      if(staff)await staffActor(tx,req);
+      const lockedTrips=await lockTrips(tx,[initial.tripId,targetId,...orderRows.map(row=>row.trip_id)]);
+      if(staff){scope(req,lockedTrips.get(initial.tripId).operator_id);scope(req,lockedTrips.get(targetId).operator_id);}
       await expire(tx,initial.tripId); if (targetId !== initial.tripId) await expire(tx,targetId);
       const row=await tx.get('SELECT * FROM bookings WHERE code=?'+lock,[code]),booking=await getBooking(code,tx);
       if (row.trip_id !== initial.tripId) fail(409,'Vé vừa được thay đổi. Vui lòng tải lại.','CONFLICT');
@@ -246,14 +254,15 @@ function createBookingFeatures(ctx) {
       for (const seat of leg.seats) await tx.run('INSERT INTO reserved_seats(trip_id,seat,booking_code) VALUES(?,?,?)',[leg.trip.id,seat,code]);
       await tx.run('UPDATE bookings SET trip_id=?,data=? WHERE code=?',[leg.trip.id,JSON.stringify(updated),code]);
       await audit(tx,code,req.user?.id || 'guest','rescheduled',{fromTrip:booking.tripId,toTrip:leg.trip.id,fromSeats:booking.seats,toSeats:leg.seats});
+      if(staff)await adminAudit(tx,req,'booking_rescheduled','booking',code,leg.trip.operatorId,{fromTrip:booking.tripId,toTrip:leg.trip.id,fromSeats:booking.seats,toSeats:leg.seats});
       return getBooking(code,tx);
     });
   }
   function installAdmin(router) {
     router.get('/admin/promotions',requireAdmin,endpoint(async(req,res)=>{const rows=await db.all('SELECT * FROM promotions ORDER BY created_at DESC'),promotions=[];for(const row of rows)promotions.push(promoShape(row,await usageCount(db,row.code)));res.json({promotions});}));
-    router.post('/admin/promotions',requireAdmin,endpoint(async(req,res)=>{const p=await validatePromotion(req.body);if(await db.get('SELECT code FROM promotions WHERE code=?',[p.code]))fail(409,'Mã ưu đãi đã tồn tại.','COUPON_EXISTS');await db.transaction(tx=>tx.run('INSERT INTO promotions(code,data,active,used_count,created_at) VALUES(?,?,?,0,?)',[p.code,JSON.stringify(p),p.active?1:0,now()]));res.status(201).json({promotion:{...p,usedCount:0}});}));
-    router.patch('/admin/promotions/:code',requireAdmin,endpoint(async(req,res)=>{const code=clean(req.params.code,32).toUpperCase(),row=await db.get('SELECT * FROM promotions WHERE code=?',[code]);if(!row)fail(404,'Không tìm thấy ưu đãi.','NOT_FOUND');const p=await validatePromotion(req.body,{...parse(row.data),active:row.active===1});await db.transaction(async tx=>{await tx.get('SELECT code FROM promotions WHERE code=?'+lock,[code]);await tx.run('UPDATE promotions SET data=?,active=? WHERE code=?',[JSON.stringify(p),p.active?1:0,code]);});res.json({promotion:{...p,usedCount:await usageCount(db,code)}});}));
-    router.delete('/admin/promotions/:code',requireAdmin,endpoint(async(req,res)=>{const code=clean(req.params.code,32).toUpperCase();if(!await db.get('SELECT code FROM promotions WHERE code=?',[code]))fail(404,'Không tìm thấy ưu đãi.','NOT_FOUND');await db.transaction(tx=>tx.run('UPDATE promotions SET active=0 WHERE code=?',[code]));res.json({message:'Đã ngừng áp dụng mã ưu đãi.'});}));
+    router.post('/admin/promotions',requireAdmin,endpoint(async(req,res)=>{const p=await validatePromotion(req.body);await db.transaction(async tx=>{await staffActor(tx,req);if(req.user.role!=='admin')fail(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN');if(await tx.get('SELECT code FROM promotions WHERE code=?',[p.code]))fail(409,'Mã ưu đãi đã tồn tại.','COUPON_EXISTS');await tx.run('INSERT INTO promotions(code,data,active,used_count,created_at) VALUES(?,?,?,0,?)',[p.code,JSON.stringify(p),p.active?1:0,now()]);await adminAudit(tx,req,'promotion_created','promotion',p.code,null,{active:p.active,type:p.type,value:p.value});});res.status(201).json({promotion:{...p,usedCount:0}});}));
+    router.patch('/admin/promotions/:code',requireAdmin,endpoint(async(req,res)=>{const code=clean(req.params.code,32).toUpperCase();const p=await db.transaction(async tx=>{await staffActor(tx,req);if(req.user.role!=='admin')fail(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN');const row=await tx.get('SELECT * FROM promotions WHERE code=?'+lock,[code]);if(!row)fail(404,'Không tìm thấy ưu đãi.','NOT_FOUND');const p=await validatePromotion(req.body,{...parse(row.data),active:row.active===1});await tx.run('UPDATE promotions SET data=?,active=? WHERE code=?',[JSON.stringify(p),p.active?1:0,code]);await adminAudit(tx,req,'promotion_updated','promotion',code,null,{active:p.active,type:p.type,value:p.value});return p;});res.json({promotion:{...p,usedCount:await usageCount(db,code)}});}));
+    router.delete('/admin/promotions/:code',requireAdmin,endpoint(async(req,res)=>{const code=clean(req.params.code,32).toUpperCase();await db.transaction(async tx=>{await staffActor(tx,req);if(req.user.role!=='admin')fail(403,'Chỉ quản trị viên có quyền thực hiện.','FORBIDDEN');if(!await tx.get('SELECT code FROM promotions WHERE code=?'+lock,[code]))fail(404,'Không tìm thấy ưu đãi.','NOT_FOUND');await tx.run('UPDATE promotions SET active=0 WHERE code=?',[code]);await adminAudit(tx,req,'promotion_deactivated','promotion',code);});res.json({message:'Đã ngừng áp dụng mã ưu đãi.'});}));
     router.post('/admin/bookings/:code/reschedule',endpoint(async(req,res)=>res.json({booking:await reschedule(req,true)})));
     router.get('/admin/trips/:id/manifest',endpoint(async(req,res)=>{await refreshExpired();const trip=await getTrip(req.params.id);if(!trip)fail(404,'Không tìm thấy chuyến xe.','NOT_FOUND');scope(req,trip.operatorId);const rows=await db.all("SELECT code FROM bookings WHERE trip_id=? AND status IN ('reserved','confirmed','pending_payment') ORDER BY created_at",[trip.id]),passengers=[];for(const row of rows){const b=await getBooking(row.code);passengers.push({bookingCode:b.code,orderCode:b.orderCode || null,fullName:b.fullName,phone:b.phone,email:b.email,seats:b.seats,pickup:b.pickup,dropoff:b.dropoff,status:b.status,paymentStatus:b.paymentStatus,total:b.total,createdAt:b.createdAt,source:b.source});}res.json({trip,passengers,counts:{bookings:passengers.length,passengers:passengers.reduce((n,b)=>n+b.seats.length,0),seats:passengers.reduce((n,b)=>n+b.seats.length,0),paid:passengers.filter(b=>b.paymentStatus==='paid').length,unpaid:passengers.filter(b=>b.paymentStatus!=='paid').length}});}));
   }

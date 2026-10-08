@@ -12,6 +12,7 @@
     "test:ui": "node scripts/browser-smoke.js",
     "test:ui:advanced": "node scripts/browser-advanced-smoke.js",
     "test:ui:regression": "node scripts/browser-regression-smoke.js",
+    "test:ui:admin": "node scripts/browser-admin-smoke.js",
     "db:migrate:legacy": "sequelize-cli db:migrate --config config/config.js",
     "pack:project": "node scripts/package-project.js"
   },

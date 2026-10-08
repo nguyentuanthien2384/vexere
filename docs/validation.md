@@ -1,5 +1,20 @@
 # Kết quả kiểm tra bản 3 — 07/10/2026
 
+## Nâng cấp trang quản trị — 08/10/2026
+
+- `npm run check`: 42 file JavaScript hợp lệ cú pháp; `git diff --check` đạt.
+- `npm test`: 53/53 đạt trên SQLite và ranh giới ứng dụng web. Bổ sung kiểm thử báo cáo theo chứng từ, ngày Việt Nam, nhật ký có phạm vi nhà xe, giao dịch bán tại quầy, giữ chủ nhà xe/tuyến/giá lịch sử và quyền nhân viên thay đổi trong lúc chờ giao dịch.
+- `npm run test:ui:admin`: 15 tình huống đạt. Bao gồm đăng nhập/phân quyền, lọc và phân trang, thêm/sửa/sao chép/ngừng bán chuyến, sửa tiện ích khi giá/lịch bị khóa, quản lý nhà xe/tài khoản, CSV/JSON và rollback khi dữ liệu đối tác thay đổi, phiếu thu/hoàn đúng tiền và không trùng chứng từ, danh sách hành khách, đóng modal bằng Escape và phản hồi tới muộn.
+- Bán tại quầy được kiểm tra giới hạn sáu ghế, ghế đang giữ bởi khách khác, cạnh tranh khi lưu, giá theo ghế, email tùy chọn, đặt chỗ chưa thu tiền, tách khách khỏi tài khoản nhân viên, chặn nhà xe khác và ngăn đóng hộp thoại khi đang ghi. Tải sơ đồ lỗi có thể thử lại; tài khoản bị khóa trả 403 đưa về đăng nhập và xóa thông tin khách đang nhập.
+- `npm run test:ui`, `npm run test:ui:advanced` và `npm run test:ui:regression` đều đạt; bộ hồi quy trang khách có 11 tình huống. Luồng thu tiền trong kiểm thử cũ đã cập nhật để đánh dấu xác nhận thu đủ tiền.
+- Đã xem ảnh dashboard, bảng chuyến, nhật ký, danh sách hành khách và bán tại quầy trên desktop/mobile. Sơ đồ ghế, thông tin liên hệ, tóm tắt giá và các nút hiển thị trong khung; bảng cuộn bên trong, điều hướng hỗ trợ Escape và hộp thoại có nhãn truy cập.
+
+Tiền thu ròng lấy từ sổ chứng từ: tiền đã thu vẫn được tính khi chờ hoàn, chỉ trừ sau khi ghi chứng từ hoàn. Tiền VNPAY đến muộn cũng được tính vào khoản đã thu/chờ hoàn, không lấy lại ghế đã bán cho người khác. Số đơn theo ngày đặt, lịch theo ngày đi, tiền theo ngày chứng từ; mốc ngày bao gồm cả ngày chọn theo `Asia/Ho_Chi_Minh`.
+
+Đợt kiểm thử dùng database tạm riêng, không sửa dữ liệu đang chạy. SQL hỗ trợ SQLite/PostgreSQL nhưng chưa kiểm thử lại PostgreSQL thực, SMTP, merchant VNPAY hoặc Docker trong đợt này. Không có giao dịch thu/hoàn tiền thật.
+
+Tham chiếu các chức năng công khai trong [hướng dẫn quản lý bán vé của Vexere](https://hotro.vexere.com/gioi-thieu-ung-dung-quan-ly-ban-ve/). Không truy cập được trang quản trị riêng để chứng nhận tương đương toàn bộ. Dự án hiện chưa có quản lý đội xe/tài xế, đại lý và công nợ, GPS, hay đồng bộ kho ghế với API nhà xe thật; hoàn tiền vẫn ghi nhận chứng từ đã thực hiện, không tự chuyển tiền.
+
 ## Cập nhật logic và icon — 08/10/2026
 
 - `npm run check`: 38 file JavaScript hợp lệ cú pháp.

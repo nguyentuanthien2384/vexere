@@ -46,11 +46,13 @@ Không cần sửa file `.env` cũ để xem bản kiểm thử. Nếu muốn c�
 
 ### Quản trị và đối tác
 
-- Tổng quan chuyến, đơn vé, doanh thu đã thu và nguồn dữ liệu.
+- Tổng quan theo khoảng ngày Việt Nam: tiền đã thu, đã hoàn, thu ròng, chưa thu, đang chờ hoàn và tỷ lệ lấp đầy; biểu đồ thu tiền và thống kê theo ngày, nhà xe, tuyến, phương thức thanh toán.
+- Bán vé tại quầy trên sơ đồ ghế theo tầng, chọn tối đa sáu ghế, kiểm tra tồn chỗ và giá trong giao dịch chung với đặt vé online. Thông tin người mua được tách khỏi tài khoản nhân viên; ghi phiếu thu riêng khi đã thu đủ tiền.
 - Thêm/sửa/ngừng hoạt động nhà xe, tạo/sửa/ngừng mở bán/nhân bản chuyến.
 - Nhập CSV/JSON, xem trước, kiểm tra toàn bộ trước khi lưu và ghi nguồn lịch từ đối tác.
-- Tra cứu đặt chỗ, xác nhận/hủy, ghi nhận phiếu thu tiền mặt, xem nhật ký thao tác.
-- Tạo tài khoản quản trị/đối tác; quyền nhà xe chỉ truy cập chuyến và đặt chỗ thuộc nhà xe được giao.
+- Tra cứu đặt chỗ theo ngày, nhà xe và trạng thái; xác nhận/hủy, ghi nhận phiếu thu hoặc hoàn đúng số tiền và mã chứng từ duy nhất.
+- Nhật ký vận hành có người thực hiện, thời gian, đối tượng và nội dung thay đổi; lọc theo ngày, nhà xe, thao tác và từ khóa, phân trang theo phạm vi được cấp.
+- Tạo/quản lý tài khoản khách và nhân viên nhà xe; quyền nhà xe chỉ truy cập dữ liệu thuộc nhà xe được giao. Thu hồi phiên khi đổi quyền hoặc khóa tài khoản; lịch sử vé và doanh thu giữ nhà xe đã bán sau khi chuyển chủ chuyến. Tài khoản quản trị cấp bằng cấu hình máy chủ.
 - Quản lý mã ưu đãi, điều kiện áp dụng, thời hạn và số lượt sử dụng.
 - Xem/in danh sách hành khách theo chuyến, ghế, điểm đón/trả và trạng thái thu tiền.
 
@@ -92,6 +94,7 @@ npm audit
 npm run test:ui
 npm run test:ui:advanced
 npm run test:ui:regression
+npm run test:ui:admin
 npm run pack:project
 ```
 

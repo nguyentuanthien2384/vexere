@@ -79,12 +79,16 @@ Trả `{order:{code,subtotal,discount,total,couponCode,bookings:[…]}}`. Hai l�
 Yêu cầu vai trò `admin` hoặc `operator`. Tài khoản operator bị giới hạn theo `operatorId` đã giao.
 
 - `GET /admin/stats`, `/admin/trips`, `/admin/operators`, `/admin/bookings`.
+- `GET /admin/stats?dateFrom=YYYY-MM-DD&dateTo=YYYY-MM-DD`: hai mốc bao gồm ngày chọn theo giờ Việt Nam; tối đa 366 ngày khi đủ hai mốc. `stats.grossRevenue` là tiền đã thu theo chứng từ, `refundedAmount` là đã hoàn, `revenue` là thu ròng. Tiền đã thu vẫn được tính trong lúc vé chờ hoàn. `outstandingAmount`, `refundPendingAmount` là số tiền trên các đơn trong kỳ. `analytics` chứa `daily`, `byStatus`, `byPaymentMethod`, `byOperator`, `byRoute`; đơn theo ngày đặt, chuyến theo ngày đi, tiền theo ngày thu/hoàn. Khi lọc một phía hoặc toàn bộ, bảng ngày hiển thị trong `analytics.dailyRange`, tối đa 366 ngày.
+- `GET /admin/bookings`: lọc `q`, `status`, `paymentStatus`, `operator`, `dateFrom`, `dateTo`, `page`, `limit`; ngày lọc theo lúc đặt vé. Quyền và báo cáo vé dùng nhà xe/tuyến đã lưu trong vé, giữ lịch sử sau khi chuyển chủ chuyến.
+- `POST /admin/bookings`: bán một chuyến tại quầy với cùng `tripId`, `seats`, `fullName`, `phone`, `pickup`, `dropoff` như đặt vé công khai; `email` tùy chọn, `paymentMethod=cash` mặc định. Máy chủ xác nhận quyền nhà xe, giờ đóng bán, ghế và giá trong giao dịch; trả `{booking}` có `channel=counter`, `createdBy` là mã nhân viên, `userId=null`, `paymentStatus=pending`. Không tự ghi tiền đã thu.
+- `GET /admin/audit`: nhật ký vận hành có `events`, `total`, `page`, `pages`; lọc `q`, `actor`, `action`, `entityType`, `entityId`, `operator`, `dateFrom`, `dateTo`, `page`, `limit`. Mỗi sự kiện gồm mã, người thực hiện, vai trò, thao tác, đối tượng, nhà xe, thời gian và `data` đã chọn lọc. Không ghi mật khẩu hoặc token; operator chỉ đọc nhật ký nhà xe của mình.
 - `POST /admin/operators`, `PATCH /admin/operators/:id`, `DELETE /admin/operators/:id`.
 - `POST /admin/trips`, `PATCH /admin/trips/:id`, `DELETE /admin/trips/:id`.
 - `POST /admin/trips/:id/duplicate`: đổi ngày/giờ và các thông tin cần thiết. Bản sao của chuyến mẫu vẫn mang nguồn mẫu.
 - `POST /admin/import`: `{source:"operator", sourceReference:"nguồn xác nhận", trips:[…]}`; hoặc nội dung `csv`. Tối đa 500 chuyến, kiểm tra toàn bộ trước khi lưu.
 - `PATCH /admin/bookings/:code`: `status=confirmed` xác nhận đặt chỗ, `status=cancelled` xử lý hủy.
-- `POST /admin/bookings/:code/cash-receipt`: `reference` của phiếu thu đã thực hiện.
+- `POST /admin/bookings/:code/cash-receipt`: `reference` của phiếu thu đã thực hiện, `amount` nếu gửi phải bằng đúng tổng vé; giao diện xác nhận đã thu đủ tiền trước khi gửi. Mã chứng từ không được trùng.
 - `POST /admin/bookings/:code/refund-receipt`: `reference`, `amount` bằng đúng tổng tiền của vé đang chờ hoàn. Ghi chứng từ hoàn đã thực hiện; không gọi ngân hàng chuyển tiền.
 - `GET /admin/bookings/:code/events`: nhật ký xử lý.
 - `POST /admin/bookings/:code/reschedule`: cùng dữ liệu đổi vé; kiểm tra phạm vi nhà xe của nhân viên.
@@ -92,7 +96,7 @@ Yêu cầu vai trò `admin` hoặc `operator`. Tài khoản operator bị giới
 - `GET /admin/promotions`, `POST /admin/promotions`, `PATCH /admin/promotions/:code`, `DELETE /admin/promotions/:code`: chỉ quản trị; xóa là ngừng mã, giữ lịch sử sử dụng.
 - `GET /admin/users`, `POST /admin/users`, `PATCH /admin/users/:id`: chỉ quản trị viên; cấp/đổi quyền nhà xe, bật/tắt tài khoản và đổi mật khẩu. Phiên cũ bị thu hồi khi thay đổi quyền.
 
-Chuyến quản lý cần `operatorId`, `from`, `to`, `date`, `departureTime`, `durationMinutes`, `price`, `totalSeats`, `type`, `pickupPoints`, `dropoffPoints`, `provenance`. `seatPrices` là map giá theo nhãn ghế tùy chọn. Điểm đón/trả, tiện ích và chính sách là mảng chuỗi. Chuyến đã có ghế đặt không được thay lịch, giá hoặc sơ đồ; thao tác ngừng bán vẫn giữ đặt chỗ và lịch sử.
+Chuyến quản lý cần `operatorId`, `from`, `to`, `date`, `departureTime`, `durationMinutes`, `price`, `totalSeats`, `type`, `pickupPoints`, `dropoffPoints`, `provenance`. `seatPrices` là map giá theo nhãn ghế tùy chọn. Điểm đón/trả, tiện ích và chính sách là mảng chuỗi. Chuyến đã có ghế đặt hoặc giữ tạm không được thay lịch, giá, sơ đồ, điểm đón/trả hoặc thời gian hành trình; vẫn sửa được tiện ích/chính sách. Ngừng bán giữ đặt chỗ và lịch sử. Chỉ admin được bật/tắt nhà xe; operator chỉnh thông tin liên hệ trong phạm vi của mình. Các thao tác ghi kiểm tra lại quyền nhân viên bên trong giao dịch và lưu nhật ký cùng lúc với thay đổi.
 
 Ưu đãi có `code`, `title`, `description`, `type=fixed|percentage`, `value`, `minSpend`, `maxDiscount`, `maxUses`, `perCustomer`, `roundTripOnly`, `operatorIds`, `routeIds`, `startsAt`, `expiresAt`, `active`. Thời điểm ISO 8601; `routeIds` dạng `ho-chi-minh--da-lat`. Trạng thái và `usedCount` được máy chủ quản lý. Hạn mức được khóa trong giao dịch, không chỉ kiểm tra ở giao diện.
 
