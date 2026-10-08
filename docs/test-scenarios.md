@@ -1,5 +1,7 @@
 # Dữ liệu và tình huống kiểm thử bản 3
 
+Đây là hướng dẫn thử dữ liệu demo bằng tay. Bộ tự động, cách chạy unit/API/UI và ngưỡng chất lượng nằm trong [testing.md](testing.md); [test-cases.json](test-cases.json) mô tả 29 tình huống theo chức năng và liên kết tới automation. Test tự động dùng kho tạm riêng, không chạy thao tác thử trên dữ liệu đang bán vé.
+
 Mở `http://localhost:3000`. Bản phát triển tự tạo kho mẫu trên 30 ngày; không cần nhập thủ công. `npm run seed` bổ sung dữ liệu còn thiếu và giữ nguyên đặt chỗ đang có. Không chạy seed vào kho vận hành thật.
 
 ## Tài khoản

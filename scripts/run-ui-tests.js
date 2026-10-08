@@ -54,5 +54,5 @@ function runSuite(suite) {
   fs.writeFileSync(path.join(directory, 'results.json'), JSON.stringify({generatedAt: new Date().toISOString(), results}, null, 2) + '\n');
   const passed = results.filter(result => result.passed).length;
   console.log('Browser suites: ' + passed + '/' + results.length + ' passed.');
-  if (passed !== results.length) process.exitCode = 1;
+  if (interrupted || passed !== suites.length) process.exitCode = 1;
 })().catch(error => { console.error(error); process.exitCode = 1; });

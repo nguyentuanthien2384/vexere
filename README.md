@@ -94,13 +94,11 @@ Production từ chối cấu hình thiếu, seed mẫu và cổng sandbox dùng 
 ```powershell
 npm run check
 npm test
+npm run test:unit
+npm run test:integration
+npm run test:ci
 npm audit
-npm run test:ui
-npm run test:ui:advanced
-npm run test:ui:regression
-npm run test:ui:admin
-npm run test:ui:api
-npm run test:ui:integrations
+npm run test:ui:all
 npm run pack:project
 ```
 
@@ -108,16 +106,19 @@ ZIP nằm ở `artifacts/Ticket4T-project.zip`, chứa mã nguồn, tài nguyên
 
 `test:ui` mở Chrome headless, chạy trên database tạm riêng và kiểm tra tìm chuyến → chọn ghế → đặt/tra cứu/hủy vé cùng các trang quản trị. Cần cài Chrome; với trình duyệt Playwright riêng, cài `npx playwright install chromium` và đặt `BROWSER_CHANNEL=chromium`. Ảnh kiểm thử được lưu vào `artifacts/screenshots/`.
 
+Đã tách unit test khỏi API/database test. `test:ci` kiểm tra cú pháp, danh mục ca và toàn bộ backend với ngưỡng coverage 95% dòng, 85% nhánh, 90% hàm; xuất JUnit/JSON/LCOV vào `artifacts/tests/coverage/`. CI GitHub có job Node24 Ubuntu/Windows, PostgreSQL16 và Chromium. Xem [hướng dẫn kiểm thử](docs/testing.md) và [29 tình huống theo chức năng](docs/test-cases.json) để xem tiền điều kiện, bước và kết quả mong đợi; kết quả từng ca được sinh trong báo cáo JSON.
+
 Xem [tình huống và dữ liệu test](docs/test-scenarios.md) để thử mã ưu đãi, vé khứ hồi, các trạng thái thanh toán, chuyến hết ghế và tài khoản nhà xe. Dữ liệu tình huống được thêm một lần, giữ nguyên vé bạn đã tạo. `npm run seed` bổ sung kho chuyến, không xóa dữ liệu. Lộ trình và chứng từ mẫu đều có nhãn minh họa.
 
 Kiểm thử PostgreSQL bằng database kiểm thử riêng:
 
 ```powershell
 $env:TEST_DATABASE_URL = 'postgresql://user:password@localhost:5432/ticket4t_test'
-npm test
+npm run test:postgres
+Remove-Item Env:TEST_DATABASE_URL
 ```
 
-Không đặt `TEST_DATABASE_URL` vào database đang bán vé. Bộ kiểm thử tạo và xử lý dữ liệu kiểm thử.
+Không đặt `TEST_DATABASE_URL` vào database đang bán vé. `test:postgres` yêu cầu tên database có đoạn `test`, tạo schema riêng cho từng bộ và dọn sau khi chạy. Lệnh `npm test` thông thường dùng SQLite tạm và không chuyển sang PostgreSQL theo biến môi trường ứng dụng.
 
 ## Cấu trúc
 

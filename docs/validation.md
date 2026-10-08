@@ -1,5 +1,17 @@
 # Kết quả kiểm tra bản 3 — 07/10/2026
 
+## Kiểm định và phát triển bộ test — 08/10/2026
+
+- Trước đợt: 98 ca trộn API/component/helper; coverage baseline 95,20% dòng, 83,76% nhánh, 91,69% hàm, chưa có unit command, coverage gate, JUnit/LCOV hay CI.
+- Sau bổ sung: `npm run test:ci` đạt **202/202**, gồm **72 unit** và **130 integration/component/subprocess**; không skip/todo. Coverage backend SQLite đạt **97,04% lines, 87,18% branches, 94,70% functions**. Ngưỡng CI: 95/85/90%; đã kiểm tra runner thật thất bại khi assertion sai hoặc coverage thiếu.
+- `npm run check`: **71** file JavaScript hợp lệ; `test:cases` kiểm tra **29** tình huống theo nhóm chức năng và **4** nhóm kết nối ngoài chưa chạy. Mỗi tình huống có tiền điều kiện, input, bước, expected và mapping automation. JSON report ghi từng ca với ID, file/dòng, status và thời gian; có JUnit và LCOV.
+- `npm run test:postgres` đạt **52/52** trên PostgreSQL **18.4** UTF8/locale C, cluster tạm riêng: backend 19, nâng cao 20, admin 10 và database/session chuyên biệt 3. Mỗi bộ dùng schema riêng, đã dọn schema; cluster riêng đã dừng và thư mục đã dọn. Các ca feature-contracts/wallet/feed mới khác vẫn SQLite, không được tuyên bố là đã kiểm chứng PostgreSQL.
+- `npm run test:ui:all`: **6/6** bộ Chrome headless đạt; gồm 11 tình huống regression, 15 admin và 6 integrations cùng smoke/advanced/API. Bốn script đã kiểm tra lỗi launch với channel không tồn tại: thoát mã 1 trong khoảng 1,6–1,9 giây, không để server sống. Teardown có unit test lỗi close và guard path xóa.
+- Sửa các lỗi được tái hiện bằng ca mới: CSV chấp nhận ký tự sau quote đóng; vượt 500 dòng nếu thiếu newline cuối; giới hạn CSV đếm ký tự thay UTF8 bytes; review dùng eligibility trước transaction nên lọt khi hủy thắng; ngày ưu đãi không tồn tại tự rollover; SMTP đã gửi nhưng cập nhật outbox lỗi làm trả chưa gửi. Thêm ID cuối cho sort tìm chuyến để phân trang đồng hạng ổn định.
+- Thêm workflow GitHub Actions: Node24 Ubuntu/Windows, PostgreSQL16 và Chromium UI, lưu artifacts kể cả thất bại. Workflow chưa được chạy trên GitHub trong đợt này; PostgreSQL16/Docker chưa được xác minh thực ở local.
+
+[Hướng dẫn kiểm thử](testing.md) và [danh mục ca](test-cases.json) ghi rõ phân tầng, cách chạy, tiêu chí và phần còn thiếu. Test sử dụng fixture/database/transport riêng; không gửi SMTP, không gọi merchant hoặc API nhà xe thật, không sửa kho vé của người dùng. Coverage chỉ tính source backend được nạp, không phải browser/legacy/live integration. Chưa có kiểm thử tải lớn, proxy nhiều tiến trình, visual baseline, WCAG/penetration audit toàn bộ hoặc xác minh kết nối merchant/SMTP/đối tác thực.
+
 ## Tích hợp API và phục hồi thanh toán — 08/10/2026
 
 - `npm test`: 98/98 kiểm thử đạt trên SQLite và ranh giới HTTP. Bổ sung 45 kiểm thử cho chống gửi trùng/phục hồi sau restart, URL thanh toán, chữ ký/kiểu dữ liệu/trạng thái MoMo, MAC ZaloPay, callback lặp/đồng thời, tiền đến muộn, lỗi mạng sau khi đơn đã lưu, cấu hình và đồng bộ feed nhà xe.

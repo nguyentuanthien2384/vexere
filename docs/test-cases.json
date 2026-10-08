@@ -1,0 +1,244 @@
+{
+  "version": 1,
+  "scope": "Ticket4T runtime index.js, server/, public/app/ và public/admin/; không bao gồm mã legacy không được mount.",
+  "cases": [
+    {
+      "id": "TC-CATALOG-01", "feature": "Danh mục, ngày Việt Nam và sơ đồ ghế", "priority": "P1",
+      "preconditions": "Dùng Date cố định và catalog cục bộ, không mở database.",
+      "input": "16:59:59/17:00 UTC; 2000/2028/2100; cabin, limousine và sức chứa lẻ.",
+      "steps": ["Tính ngày Việt Nam và cộng/trừ ngày qua tháng, năm.", "Sinh sơ đồ ghế và itinerary đi qua nửa đêm."],
+      "expected": "Ngày đổi chính xác theo +07; lịch Gregorian đúng; nhãn ghế duy nhất, đúng sức chứa/tầng; thời gian hành trình tăng dần và có nhãn mẫu.",
+      "automation": [{"file": "tests/unit/domain.test.js", "ids": ["UT-CAT-"]}, {"file": "tests/fixtures.test.js"}]
+    },
+    {
+      "id": "TC-SEARCH-01", "feature": "Tìm kiếm, lọc, sắp xếp và phân trang", "priority": "P1",
+      "preconditions": "Kho test có chuyến ở biên 06:00/12:00/18:00 và chuyến trùng giá/giờ, rating khác nhau.",
+      "input": "from/to/date, minPrice/maxPrice, time, type, pickup/dropoff, sort=price/rating và page/limit.",
+      "steps": ["Gọi GET /api/trips với bộ lọc kết hợp và qua từng trang.", "Thử ngày không tồn tại, giá âm/NaN/Infinity và tìm kiếm tiếng Việt.", "Lặp lại trang có các chuyến đồng hạng được chèn ngược thứ tự ID."],
+      "expected": "Bộ lọc giờ không chồng lấn; tổng số/trang đúng; thứ tự có ID cuối để ổn định khi đồng hạng; dữ liệu sai trả 400; tìm tên có dấu/viết hoa đúng.",
+      "automation": [{"file": "tests/feature-contracts.test.js", "ids": ["IT-SRCH-"]}, {"file": "tests/advanced.test.js"}, {"file": "scripts/browser-regression-smoke.js"}]
+    },
+    {
+      "id": "TC-BOOK-01", "feature": "Đặt vé một chiều và giá từ máy chủ", "priority": "P0",
+      "preconditions": "Một chuyến managed và kho ghế mới trong database riêng.",
+      "input": "Ghế hợp lệ/sai/trùng, từ 0 đến 7 ghế, giá giả từ client, điểm đón/trả sai.",
+      "steps": ["Đặt vé và kiểm tra tổng tiền cùng reserved_seats.", "Gửi đầu vào sai và kiểm tra số bản ghi trước/sau.", "Gửi 8 yêu cầu đồng thời cho cùng một ghế."],
+      "expected": "Giá theo server và giá riêng theo ghế; lỗi không ghi dữ liệu; đúng một người giữ được ghế, các yêu cầu còn lại 409.",
+      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "scripts/browser-smoke.js"}]
+    },
+    {
+      "id": "TC-HOLD-01", "feature": "Giữ ghế, gia hạn, thay thế và hết hạn", "priority": "P0",
+      "preconditions": "Hai phiên khách và ba chuyến test, giữ chỗ có capability riêng.",
+      "input": "Cùng ghế, token sai/hết hạn, đổi ghế và đăng nhập sau giữ chỗ.",
+      "steps": ["Cạnh tranh giữ cùng ghế rồi thử thiếu token, token sai, không khớp ghế và hết hạn.", "Thay thế/nhả giữ chỗ, kiểm tra giới hạn hai chuyến và login đổi session.", "Đưa thời điểm về mốc đóng bán trước khởi hành 30 phút."],
+      "expected": "Giữ ghế nguyên tử; không lộ token; capability hợp lệ được dùng dù cookie trước không còn, phiên vẫn nhận giữ chỗ sau login; hết hạn giải phóng kho; giữ chỗ không vượt mốc đóng bán.",
+      "automation": [{"file": "tests/advanced.test.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}]
+    },
+    {
+      "id": "TC-IDEMPOTENCY-01", "feature": "Thử lại checkout và phục hồi mất phản hồi", "priority": "P0",
+      "preconditions": "Booking/order sử dụng Idempotency-Key; database và outbox riêng.",
+      "input": "Cùng key/payload, JSON đổi thứ tự thuộc tính, payload/endpoint/người dùng khác, hold đã tiêu thụ.",
+      "steps": ["Gửi đồng thời cùng checkout rồi restart API và thử lại.", "Thử key sai, dữ liệu đổi và phạm vi guest/user khác.", "Trên trình duyệt, bỏ phản hồi sau khi server commit, reload và gửi lại."],
+      "expected": "Một booking/order, một lần dùng ưu đãi, một email; phục hồi kết quả đã lưu; dữ liệu đổi trả 409; lỗi ban đầu không tiêu thụ key.",
+      "automation": [{"file": "tests/unit/payments.test.js", "ids": ["UT-IDEM-"]}, {"file": "tests/checkout-recovery.test.js"}, {"file": "scripts/browser-api-smoke.js"}]
+    },
+    {
+      "id": "TC-ROUNDTRIP-01", "feature": "Khứ hồi, tính tiền và rollback", "priority": "P0",
+      "preconditions": "Hai chuyến đối chiều, ưu đãi và khách test.",
+      "input": "Hai lượt hợp lệ, sai chiều/thứ tự thời gian/số ghế; lượt về bị cạnh tranh; giảm 100%.",
+      "steps": ["Tạo đơn, kiểm tra liên kết hai vé và phân bổ chiết khấu.", "Làm lượt về hết ghế rồi kiểm tra rollback toàn bộ.", "Hủy một/hai lượt, gồm hai yêu cầu đồng thời."],
+      "expected": "Tổng các lượt bằng tổng đơn; rollback không để vé/ghế/ưu đãi mồ côi; quota hoàn trả đúng một lần khi đủ điều kiện; khứ hồi từ chối thanh toán online tổng hợp chưa hỗ trợ.",
+      "automation": [{"file": "tests/advanced.test.js"}, {"file": "tests/checkout-recovery.test.js"}, {"file": "scripts/browser-advanced-smoke.js"}]
+    },
+    {
+      "id": "TC-COUPON-01", "feature": "Báo giá và hạn mức ưu đãi", "priority": "P0",
+      "preconditions": "Ưu đãi giới hạn lượt toàn cục/từng khách, nhà xe/tuyến và mức chi tiêu.",
+      "input": "Mã đúng/sai/hết hạn, minSpend/maxDiscount, roundTripOnly và ghế không còn khả dụng.",
+      "steps": ["Báo giá, đặt vé đồng thời trên hai chuyến với quota cuối.", "Hủy vé chưa thu tiền và đã thu/hoàn tiền.", "Thử token giữ ghế sai trong quote và phản hồi coupon tới muộn trên UI."],
+      "expected": "Quote không tiêu thụ quota; checkout khóa quota; tổng tiền chính xác; chỉ hủy chưa thu tiền hoàn lượt; phản hồi trễ không phục hồi mã đã đổi.",
+      "automation": [{"file": "tests/advanced.test.js"}, {"file": "scripts/browser-regression-smoke.js"}]
+    },
+    {
+      "id": "TC-PAY-VNPAY-01", "feature": "VNPAY ký URL và xác minh IPN", "priority": "P0",
+      "preconditions": "Khóa merchant test cố định, callback cục bộ, không gọi VNPAY thật.",
+      "input": "Vector HMAC, Unicode/space/plus, signature/amount sai, callback lặp và tiền đến sau hết hạn.",
+      "steps": ["So chữ ký với vector cố định và byte URL truyền thực tế.", "Gửi return rồi IPN đúng/sai và callback lặp.", "Bán lại ghế trước khi callback thành công cũ đến."],
+      "expected": "Chỉ IPN đã xác minh mới thu tiền; đúng tiền/mã merchant; không thu trùng; tiền đến muộn vào chờ hoàn và không lấy lại ghế đã bán.",
+      "automation": [{"file": "tests/unit/payments.test.js", "ids": ["UT-VNP-"]}, {"file": "tests/backend.test.js"}]
+    },
+    {
+      "id": "TC-PAY-WALLET-01", "feature": "MoMo/ZaloPay tạo thanh toán và callback", "priority": "P0",
+      "preconditions": "Transport cổng giả lập, cấu hình merchant test và booking managed.",
+      "input": "Tạo link, đổi credentials, lỗi mạng/timeout/JSON lớn, MAC sai và transaction đã dùng cho vé khác.",
+      "steps": ["Kiểm tra body/chữ ký gửi cổng, tạo đồng thời rồi restart và tiếp tục.", "Mất phản hồi cổng sau lưu attempt và thử lại.", "Gửi IPN đúng/sai/lặp/đồng thời, pending MoMo và thành công đến muộn."],
+      "expected": "Một remote order; lỗi không tạo lại khoản thu; chỉ callback ký đúng và đúng identity/amount settle; pending giữ ghế; tiền muộn vào chờ hoàn; trả về trình duyệt không settle.",
+      "automation": [{"file": "tests/wallet-payments.test.js"}, {"file": "tests/wallet-api.test.js"}, {"file": "scripts/browser-api-smoke.js"}]
+    },
+    {
+      "id": "TC-PAY-RESUME-01", "feature": "Tiếp tục thanh toán và trạng thái khách", "priority": "P0",
+      "preconditions": "Booking pending có deadline và người dùng/phone đúng.",
+      "input": "Phone/người dùng sai, vé hết hạn/đã thu, gateway tắt, demo với endpoint live.",
+      "steps": ["Yêu cầu payment-link với các trạng thái khác nhau.", "Quay về từ cổng và reload trang.", "Đổi trang khi API chậm và cập nhật ghế khi nút đang có focus."],
+      "expected": "Chỉ chủ vé tiếp tục được; không gia hạn hoặc xác nhận thu tiền bằng link; demo không đến cổng live; dữ liệu khách được phục hồi đúng, phản hồi cũ không đổi trang và focus còn giữ.",
+      "automation": [{"file": "tests/checkout-recovery.test.js"}, {"file": "scripts/browser-api-smoke.js"}]
+    },
+    {
+      "id": "TC-CANCEL-01", "feature": "Tra cứu, hủy và đổi chuyến", "priority": "P0",
+      "preconditions": "Vé khách/nhân viên khác nhau; chuyến đích cùng/khác giá.",
+      "input": "Mã/phone đúng-sai, hủy trong 2 giờ, chuyến hết ghế, khách/nhà xe không sở hữu.",
+      "steps": ["Tra cứu và hủy/đổi từ guest, customer và operator.", "Thử hai yêu cầu hủy đồng thời và đổi chuyến có discount.", "Sửa kho chuyến sau hủy rồi kiểm tra lịch sử vé."],
+      "expected": "Không truy cập vé người khác; đúng mốc hủy; chuyển ghế nguyên tử; giữ giá/lộ trình/nhà xe snapshot; vé đã thu chuyển chờ hoàn.",
+      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "scripts/browser-smoke.js"}]
+    },
+    {
+      "id": "TC-AUTH-01", "feature": "Đăng ký, đăng nhập, logout và rate limit", "priority": "P0",
+      "preconditions": "API thật trên HTTP loopback với session store riêng.",
+      "input": "Email hoa/thường/trùng, profile/password sai, role/operatorId tự gửi, cookie cũ và spoofed XFF.",
+      "steps": ["Đăng ký, thử mass assignment và đăng nhập lỗi.", "Login/logout và sử dụng lại cookie cũ.", "Gửi đủ lần login sai và thay forwarding header."],
+      "expected": "Chuẩn hóa email; đầu vào sai không tạo tài khoản/email; khách không tự tăng quyền; session xoay/thu hồi; lỗi login không lộ tồn tại tài khoản; quota mặc định không bị XFF giả vượt qua.",
+      "automation": [{"file": "tests/feature-contracts.test.js", "ids": ["IT-AUTH-001", "IT-AUTH-002", "IT-AUTH-003", "IT-AUTH-005"]}, {"file": "tests/web.test.js"}]
+    },
+    {
+      "id": "TC-TOKEN-01", "feature": "Xác minh email và khôi phục mật khẩu", "priority": "P0",
+      "preconditions": "Outbox test và token hashed trong database riêng.",
+      "input": "Token sai/hết hạn/đã dùng/sai purpose, token trước khi resend và session trước reset.",
+      "steps": ["Tạo/resend verify và yêu cầu reset.", "Thử token cũ, sai purpose, hết hạn và dùng lại token thành công.", "Kiểm tra session cũ và dữ liệu token lưu."],
+      "expected": "Chỉ hash được lưu; dùng một lần; resend thu hồi token trước; reset thu hồi session; token sai không đổi identity.",
+      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/feature-contracts.test.js", "ids": ["IT-AUTH-004"]}]
+    },
+    {
+      "id": "TC-HISTORY-01", "feature": "Lịch sử vé và đơn của tài khoản", "priority": "P0",
+      "preconditions": "Hai khách đăng nhập và guest cùng email hoặc phone.",
+      "input": "Booking/order có cùng thông tin liên hệ nhưng userId khác hoặc null.",
+      "steps": ["Tạo vé và khứ hồi ở từng phạm vi.", "GET /bookings và /orders bằng từng cookie."],
+      "expected": "Lịch sử chỉ theo chủ tài khoản; contact trùng không chuyển vé của guest/khách khác sang tài khoản.",
+      "automation": [{"file": "tests/feature-contracts.test.js", "ids": ["IT-HIST-"]}]
+    },
+    {
+      "id": "TC-REVIEW-01", "feature": "Đánh giá đã xác minh và cạnh tranh hủy", "priority": "P0",
+      "preconditions": "Vé managed owned/paid/confirmed đã hoàn tất hành trình.",
+      "input": "Rating 0/6/1.5, comment ngắn, vé demo/chưa đến, hai review và cancellation queued.",
+      "steps": ["Thử đầu vào và điều kiện chuyến không hợp lệ.", "Gửi hai đánh giá đồng thời.", "Giữ transaction gate, xếp hủy vé trước review rồi mở gate."],
+      "expected": "Đúng một review; rating/count chỉ tăng khi hợp lệ; hủy thắng thì review 409; không lộ email/phone/userId/mã vé trong review công khai.",
+      "automation": [{"file": "tests/feature-contracts.test.js", "ids": ["IT-REV-"]}, {"file": "tests/backend.test.js"}]
+    },
+    {
+      "id": "TC-PROMO-ADMIN-01", "feature": "Quản trị ưu đãi và ngày ISO", "priority": "P1",
+      "preconditions": "Admin/operator/customer và ưu đãi test.",
+      "input": "Nhà xe/tuyến không có, boolean sai, Feb30/nonleapFeb29/Apr31/24:00 và leap date +07.",
+      "steps": ["Tạo/sửa/ngừng/kích hoạt ưu đãi, kiểm tra eligibility công khai.", "Gửi date/reference sai ở POST và PATCH, so database/audit trước sau.", "Gửi ngày nhuận và múi giờ hợp lệ."],
+      "expected": "Chỉ admin quản lý; sai trả 400, rollback không audit; không tự dịch ngày không tồn tại; ngày hợp lệ chuẩn hóa UTC; quote không tiêu thụ quota.",
+      "automation": [{"file": "tests/feature-contracts.test.js", "ids": ["IT-PROMO-"]}, {"file": "scripts/browser-advanced-smoke.js"}]
+    },
+    {
+      "id": "TC-ADMIN-AUTH-01", "feature": "Nhân viên, phạm vi nhà xe và thu hồi quyền", "priority": "P0",
+      "preconditions": "Hai nhà xe, admin và nhân viên nhà xe test.",
+      "input": "Email trùng, role admin, operatorId sai, disable/đổi phạm vi trong lúc transaction chờ.",
+      "steps": ["Tạo/sửa nhân viên với dữ liệu sai và quyền không đủ.", "Đổi quyền/vô hiệu hóa khi API/bán tại quầy đang chờ khóa.", "Thử cập nhật chính admin và gọi API nhà xe khác."],
+      "expected": "Email trùng 409; admin không bị hạ/khóa; không tăng quyền; session bị thu hồi; transaction kiểm tra lại actor/phạm vi và không ghi dữ liệu ngoài quyền.",
+      "automation": [{"file": "tests/feature-contracts.test.js", "ids": ["IT-ADMIN-"]}, {"file": "tests/admin.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "scripts/browser-admin-smoke.js"}]
+    },
+    {
+      "id": "TC-TRIP-ADMIN-01", "feature": "Nhà xe và vòng đời chuyến", "priority": "P0",
+      "preconditions": "Kho managed có chuyến trống, giữ ghế và đặt vé.",
+      "input": "Thêm/sửa/sao chép/ngừng bán, đổi giá/lịch/sơ đồ/chủ khi đang giữ hoặc đặt.",
+      "steps": ["Thực hiện lifecycle và chỉnh tiện ích hợp lệ.", "Thử sửa các trường kho đã bị khóa.", "Đổi chủ sau inventory đã hủy và kiểm tra historical booking scope."],
+      "expected": "Bảo vệ kho đang bán; ngừng không xóa lịch sử; dữ liệu giá/lộ trình/chủ lịch sử không bị đổi; UI filter/refresh giữ trạng thái.",
+      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "scripts/browser-admin-smoke.js"}]
+    },
+    {
+      "id": "TC-IMPORT-01", "feature": "Import CSV/JSON và giới hạn", "priority": "P0",
+      "preconditions": "Text parser thuần và API admin trên database riêng.",
+      "input": "Quoted commas/double quotes/CRLF; quote đóng rồi thêm ký tự; 500/501 dòng có/không newline; Unicode hơn 1MB; ô quá dài; hàng API sai.",
+      "steps": ["Parse dữ liệu biên và định dạng sai.", "Import nhiều hàng với một hàng lỗi, kiểm tra rollback.", "Thử operator scope và provenance sai."],
+      "expected": "Dữ liệu hợp lệ giữ nguyên giá trị; sai định dạng/byte/dòng bị chặn; batch nguyên tử; không nhập thay nhà xe khác hoặc ghi provenance giả.",
+      "automation": [{"file": "tests/unit/domain.test.js", "ids": ["UT-CSV-"]}, {"file": "tests/backend.test.js"}, {"file": "scripts/browser-admin-smoke.js"}]
+    },
+    {
+      "id": "TC-FEED-01", "feature": "Feed nhà xe, xem trước và áp dụng", "priority": "P0",
+      "preconditions": "HTTP partner mock local, token test và mapping nhà xe cố định.",
+      "input": "JSONv1 hợp lệ/sai, redirect/lỗi/slow stream, quá size, external inventory, digest đổi, chuyến đang giữ/đặt.",
+      "steps": ["Preview và so số bản ghi trước/sau.", "Apply hai lần rồi đổi dữ liệu sau preview.", "Tạo hold/booking trước apply hoặc làm upstream không hợp lệ."],
+      "expected": "Preview không ghi; ID ổn định/upsert không trùng; digest thay đổi trả 409; inventory khóa rollback batch; giới hạn timeout/size; token/upstream details không lộ.",
+      "automation": [{"file": "tests/operator-feed.test.js"}, {"file": "tests/operator-sync.test.js"}, {"file": "scripts/browser-integrations-smoke.js"}]
+    },
+    {
+      "id": "TC-CONFIG-01", "feature": "Trạng thái cấu hình tích hợp", "priority": "P0",
+      "preconditions": "Cấu hình rỗng/một phần/đủ, production/development và inventory count test.",
+      "input": "Endpoint sandbox/live/lookalike, IPv6 local, token control chars, timeout và operatorId biên.",
+      "steps": ["Tính trạng thái SMTP/VNPAY/wallet/feed bằng helper runtime.", "Gọi admin integrations bằng các vai trò.", "So JSON không chứa secret, hostname, merchant ID và dữ liệu khách."],
+      "expected": "Configured phản ánh cấu hình thực, externallyVerified luôn false khi chưa xác minh ngoài; chỉ admin xem; HTTPS đúng môi trường; dữ liệu nhạy cảm không lộ.",
+      "automation": [{"file": "tests/unit/integration-config.test.js", "ids": ["UT-CONFIG-"]}, {"file": "tests/integration-status.test.js"}, {"file": "scripts/browser-integrations-smoke.js"}]
+    },
+    {
+      "id": "TC-COUNTER-01", "feature": "Bán vé tại quầy và manifest", "priority": "P0",
+      "preconditions": "Nhân viên scoped, chuyến test có ghế available/held/booked.",
+      "input": "Tối đa 6 ghế, giá theo ghế, email tùy chọn, ghế tranh chấp và revoked session.",
+      "steps": ["Tạo booking tại quầy và kiểm tra passenger manifest/history.", "Gửi tranh chấp ghế cuối, đổi quyền trong lúc chờ và retry sơ đồ lỗi.", "Kiểm tra modal desktop/mobile, Escape và input khi đang lưu."],
+      "expected": "Ghế/booking nguyên tử và scoped; chưa thu tiền; không gắn vé vào lịch sử nhân viên; dữ liệu khách bị xóa khi quyền mất; không đóng modal đang ghi.",
+      "automation": [{"file": "tests/admin.test.js"}, {"file": "scripts/browser-admin-smoke.js"}]
+    },
+    {
+      "id": "TC-LEDGER-01", "feature": "Phiếu thu, hoàn tiền, doanh thu và audit", "priority": "P0",
+      "preconditions": "Booking và chứng từ test có ngày Việt Nam khác ngày tạo vé/ngày đi.",
+      "input": "Amount sai, reference trùng, hoàn một lần, ngày báo cáo inclusive và phạm vi nhà xe.",
+      "steps": ["Thu đúng đủ tiền rồi hủy và ghi hoàn.", "Thử chứng từ sai/trùng và so ledger/audit.", "Báo cáo lọc ngày/phạm vi, gồm giao dịch ngay cuối ngày."],
+      "expected": "Tiền ròng theo chứng từ; chờ hoàn vẫn là tiền đã thu; chỉ trừ khi có hoàn; reference duy nhất; inclusive +07; audit scoped và không chứa password.",
+      "automation": [{"file": "tests/unit/domain.test.js", "ids": ["UT-REPORT-"]}, {"file": "tests/admin.test.js"}, {"file": "tests/backend.test.js"}, {"file": "scripts/browser-admin-smoke.js"}]
+    },
+    {
+      "id": "TC-MAIL-01", "feature": "Email và outbox", "priority": "P0",
+      "preconditions": "Mock nodemailer, DB in-memory, fs và console; không gửi SMTP thật.",
+      "input": "HTML đặc biệt, thiếu SMTP production, sensitive tokens, SMTP fail và gửi xong nhưng UPDATE outbox lỗi.",
+      "steps": ["Gọi mailer ở development/production và kiểm tra config/recipient/body.", "Làm sendMail reject rồi làm post-send status update reject.", "Kiểm tra không ghi token recovery production và log không chứa dữ liệu nhạy cảm."],
+      "expected": "Escaping đúng; delivered:false chỉ khi chưa xác nhận gửi; SMTP đã gửi thì delivered:true dù outbox lỗi; log recording error riêng; không gửi lại.",
+      "automation": [{"file": "tests/unit/mailer.test.js", "ids": ["UT-MAIL-"]}]
+    },
+    {
+      "id": "TC-DATABASE-01", "feature": "SQLite transaction, upgrade và session store", "priority": "P0",
+      "preconditions": "Database file tạm mới/legacy, mỗi ca riêng.",
+      "input": "Commit/reject, unique race, FK orphan, legacy thiếu cột, session expired/closed DB.",
+      "steps": ["Commit và reopen, rollback nhiều ghi, xếp transaction sau rejection.", "Cạnh tranh unique key, thử FK và vi_lower.", "Mở legacy schema và thử upsert/touch/expiry/destroy/error callback/close đang có transaction."],
+      "expected": "Không mất dữ liệu; rollback đầy đủ; queue tiếp tục chạy; schema upgrade idempotent; session callback đúng một lần và close đợi commit.",
+      "automation": [{"file": "tests/database.test.js", "ids": ["IT-DB-"]}]
+    },
+    {
+      "id": "TC-POSTGRES-01", "feature": "PostgreSQL thực và khóa kho vé", "priority": "P0",
+      "preconditions": "TEST_DATABASE_URL trỏ database riêng tên có test; runner tạo schema ngẫu nhiên cho từng file.",
+      "input": "Commit/rollback, 8 unique/seat contenders, reservation/hold/coupon/receipt và session.",
+      "steps": ["Chạy npm run test:postgres qua bốn bộ đã opt in.", "Kiểm tra reports từng file và schema đã dọn."],
+      "expected": "Không bán/thu/tiêu quota trùng; rollback và pool còn dùng được; session đúng; schema test bị xóa sau mỗi bộ, không dùng public schema.",
+      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "tests/postgres/database.test.js", "ids": ["IT-PG-"]}]
+    },
+    {
+      "id": "TC-WEB-01", "feature": "Ranh giới web, production và dữ liệu mẫu", "priority": "P0",
+      "preconditions": "Ứng dụng HTTP thật với cấu hình test và các cấu hình production thiếu.",
+      "input": "Cross-site POST, exact wallet IPN path, path bí mật/legacy, production seed/incomplete config.",
+      "steps": ["Khởi tạo production thiếu cấu hình trước khi mở DB.", "Gọi cross-site write, public assets, legacy và secret paths.", "Gửi IPN exact/sai path, kiểm tra signatures và dữ liệu demo."],
+      "expected": "Từ chối cấu hình sai, seed mẫu và write cross-site; secret/maintenance không truy cập được; chỉ exact signed IPN được miễn origin; production không bán demo.",
+      "automation": [{"file": "tests/web.test.js"}, {"file": "tests/fixtures.test.js"}, {"file": "tests/wallet-api.test.js"}, {"file": "tests/backend.test.js"}]
+    },
+    {
+      "id": "TC-UI-01", "feature": "Điều hướng khách, responsive và phản hồi trễ", "priority": "P1",
+      "preconditions": "Chrome headless với kho test riêng, viewport desktop/mobile.",
+      "input": "Storage sai cấu trúc, đổi route/date/coupon, keyboard Escape, menu/filter mobile.",
+      "steps": ["Chạy toàn bộ sáu browser suites.", "Kiểm tra search/checkout/lookup/admin, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
+      "expected": "Luồng chính chạy được, không blank screen/overflow; phản hồi trễ không đổi trạng thái mới; keyboard/modal hoạt động; screenshots lưu để xem thủ công, không phải visual baseline tự động.",
+      "automation": [{"file": "scripts/browser-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-admin-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-integrations-smoke.js"}]
+    },
+    {
+      "id": "TC-TOOLING-01", "feature": "Test runner, báo cáo và teardown", "priority": "P1",
+      "preconditions": "Node24+, fixture fake hoặc thư mục OS temp riêng.",
+      "input": "Nested unit files, PostgreSQL target sai, application DB env, lỗi browser close và path cleanup không an toàn.",
+      "steps": ["Kiểm tra discovery và environment sanitization.", "Chạy unit/integration/coverage và xem JUnit/JSON/LCOV.", "Làm launch/close browser lỗi, kiểm tra HTTP/DB được đóng và cleanup path guard."],
+      "expected": "Đúng tầng test; ordinary test không dùng DB ứng dụng; lỗi/coverage thấp trả mã khác 0; teardown không bỏ qua resource tiếp theo; không xóa path ngoài temp fixture.",
+      "automation": [{"file": "tests/unit/test-runner.test.js", "ids": ["UT-RUNNER-"]}, {"file": "tests/unit/browser-test-helpers.test.js", "ids": ["UT-HARNESS-"]}, {"file": "tests/test-tooling.test.js", "ids": ["IT-TOOL-"]}]
+    }
+  ],
+  "pendingExternalCases": [
+    {"id": "EXT-WALLET-01", "status": "not-run", "requirement": "Sandbox merchant có quyền truy cập, callback public HTTPS", "expected": "Cổng thật nhận đúng request, webhook lặp đúng ledger và xác minh đối soát; không thực hiện thanh toán live trong bộ test mặc định."},
+    {"id": "EXT-SMTP-01", "status": "not-run", "requirement": "SMTP test và mailbox kiểm soát", "expected": "Thư verify/reset/booking thực tới hộp thư, link đúng domain, SPF/DKIM và bounce được kiểm chứng ở triển khai."},
+    {"id": "EXT-OPERATOR-01", "status": "not-run", "requirement": "Tài liệu và sandbox API nhà xe cụ thể", "expected": "Đồng bộ lịch/kho thực; giữ/đặt/hủy/đối soát đa kênh theo hợp đồng, hiện adapter chỉ feed lịch JSONv1."},
+    {"id": "EXT-DEPLOY-01", "status": "not-run", "requirement": "Môi trường staging có proxy và topology vận hành", "expected": "TLS, cookie, TRUST_PROXY, rate-limit nhiều tiến trình, tải lớn và restore backup được kiểm chứng; CI GitHub chạy thực trên Ubuntu/Windows và PostgreSQL16."}
+  ]
+}

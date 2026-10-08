@@ -7,7 +7,7 @@ const {spawnSync} = require('node:child_process');
 const {pathToFileURL} = require('node:url');
 
 const root = path.resolve(__dirname, '..');
-const thresholds = Object.freeze({lines: 90, branches: 80, functions: 85});
+const thresholds = Object.freeze({lines: 95, branches: 85, functions: 90});
 const modes = new Set(['all', 'unit', 'integration', 'coverage', 'postgres']);
 
 function discoverTestFiles(directory, mode = 'all') {
