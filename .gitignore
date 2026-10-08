@@ -1,0 +1,74 @@
+# ---------- Dependencies ----------
+node_modules/
+jspm_packages/
+bower_components/
+.npm/
+
+# Dự án dùng npm (package-lock.json); pnpm-lock.yaml là file cũ của bản legacy
+pnpm-lock.yaml
+yarn.lock
+.pnp.*
+.yarn/
+
+# ---------- Biến môi trường / bí mật ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------- Dữ liệu runtime (SQLite, session secret, upload) ----------
+/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.db
+
+# ---------- Build, gói dự án, kết quả kiểm thử ----------
+/artifacts/
+*.zip
+*.tgz
+coverage/
+.nyc_output/
+*.lcov
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# ---------- Logs ----------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# ---------- Cache ----------
+.cache/
+.eslintcache
+.stylelintcache
+.sass-cache/
+*.tsbuildinfo
+.node_repl_history
+
+# ---------- Runtime ----------
+pids/
+*.pid
+*.pid.lock
+
+# ---------- Editor / IDE ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+.claude/settings.local.json
+
+# ---------- Hệ điều hành ----------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/

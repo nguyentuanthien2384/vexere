@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ticket4t}
+      POSTGRES_USER: ${POSTGRES_USER:-ticket4t}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env before starting Docker}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-ticket4t}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ticket4t}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env before starting Docker}
+      SEED_DEMO: ${SEED_DEMO:-true}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      PG_SSL: ${PG_SSL:-false}
+      PG_SSL_REJECT_UNAUTHORIZED: ${PG_SSL_REJECT_UNAUTHORIZED:-true}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@ticket4t.vn}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      VNPAY_TMN_CODE: ${VNPAY_TMN_CODE:-}
+      VNPAY_HASH_SECRET: ${VNPAY_HASH_SECRET:-}
+      VNPAY_URL: ${VNPAY_URL:-https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+volumes:
+  postgres_data:

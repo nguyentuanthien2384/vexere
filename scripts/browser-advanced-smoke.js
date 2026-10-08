@@ -1,0 +1,91 @@
+'use strict';
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const os=require('node:os');
+const path=require('node:path');
+const {chromium}=require('playwright');
+const {createApp}=require('../index');
+const {addDays}=require('../server/catalog');
+
+(async()=>{
+  const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'ticket4t-browser-v3-'));
+  const output=path.resolve('artifacts/screenshots');await fs.mkdir(output,{recursive:true});
+  const runtime=await createApp({env:{NODE_ENV:'development',SEED_DEMO:'true',SESSION_SECRET:'advanced-ui-tests-only-'.repeat(3)},dataDir,seedDays:5,disableRateLimit:true});
+  const server=runtime.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+  const base='http://127.0.0.1:'+server.address().port;
+  const browser=await chromium.launch({channel:process.env.BROWSER_CHANNEL||'chrome',headless:true});
+  const failures=[];
+  const instrument=page=>{
+    page.on('pageerror',e=>failures.push(e.message));
+    page.on('console',m=>{if(m.type()==='error'&&/Content Security Policy|Refused to|Uncaught/.test(m.text()))failures.push(m.text());});
+    page.on('response',r=>{if(r.status()===404&&!r.url().includes('/api/')&&!r.url().endsWith('/favicon.ico'))failures.push('404 '+r.url());});
+  };
+  try {
+    const page=await browser.newPage({viewport:{width:1440,height:1000}});instrument(page);
+    const bootstrap=await(await fetch(base+'/api/bootstrap')).json(),outDate=addDays(bootstrap.today,1),backDate=addDays(bootstrap.today,2),changeDate=addDays(bootstrap.today,3);
+    await page.goto(base);await page.locator('#search-form').waitFor();
+    await page.check('input[name="tripMode"][value="roundtrip"]');
+    await page.selectOption('#search-from','ho-chi-minh');await page.selectOption('#search-to','da-lat');
+    await page.fill('#search-date',outDate);await page.fill('#search-return-date',backDate);
+    await page.evaluate(()=>document.fonts.ready);await page.screenshot({path:path.join(output,'home-roundtrip-desktop.png'),fullPage:true});
+    await page.locator('#search-form button[type="submit"]').click();await page.locator('.trip-card').first().waitFor();
+    const searchUrl=page.url();assert.equal(await page.locator('.trip-card').count(),4);
+    const pickupResponse=page.waitForResponse(r=>r.url().includes('/api/trips?')&&new URL(r.url()).searchParams.get('pickup')==='Văn phòng');
+    await page.fill('#filter-pickup','Văn phòng');await page.locator('#filter-form button[type="submit"]').click();await pickupResponse;await page.locator('.trip-card').first().waitFor();assert.equal(await page.locator('.trip-card').count(),4);
+    const dropoffResponse=page.waitForResponse(r=>r.url().includes('/api/trips?')&&new URL(r.url()).searchParams.get('dropoff')==='Điểm không tồn tại');
+    await page.fill('#filter-dropoff','Điểm không tồn tại');await page.locator('#filter-form button[type="submit"]').click();assert.equal((await(await dropoffResponse).json()).total,0);await page.locator('#search-results .empty').waitFor();assert.equal(await page.locator('.trip-card').count(),0);
+    await page.locator('[data-action="clear-filters"]').first().click();await page.locator('.trip-card').first().waitFor();assert.equal(await page.locator('.trip-card').count(),4);
+    await page.locator('[data-action="favorite"]').first().click();
+    await page.locator('[data-action="compare"]').nth(0).click();await page.locator('[data-action="compare"]').nth(1).click();
+    await page.goto(base+'/#/compare');await page.locator('.compare-card').first().waitFor();assert.equal(await page.locator('.compare-card').count(),2);
+    await page.screenshot({path:path.join(output,'compare-desktop.png'),fullPage:true});
+    await page.goto(base+'/#/favorites');await page.locator('.trip-card').first().waitFor();assert.equal(await page.locator('.trip-card').count(),1);
+    await page.goto(searchUrl);await page.locator('.trip-card .btn').first().waitFor();await page.locator('.trip-card .btn').first().click();
+    await page.locator('[data-action="seat"]:enabled').first().waitFor();
+    await page.locator('[data-action="seat"][data-label="A01"]').click();await page.locator('[data-action="seat"][data-label="A02"]').click();
+    const holdResponse=page.waitForResponse(r=>r.url().endsWith('/api/holds')&&r.request().method()==='POST');await page.locator('[data-action="checkout"]').click();
+    const hold=await(await holdResponse).json();assert.equal(hold.hold.seats.length,2);
+    await page.waitForURL(/leg=return/);await page.locator('.trip-card').first().waitFor();
+    assert.match(await page.locator('[data-hold-clock]').first().innerText(),/\d/);
+    const heldTrip=await(await fetch(base+'/api/trips/'+hold.hold.tripId)).json();assert.equal(heldTrip.seats.find(s=>s.label==='A01').status,'held');
+    await page.locator('.trip-card .btn').first().click();await page.locator('[data-action="seat"]:enabled').first().waitFor();
+    await page.locator('[data-action="seat"][data-label="A01"]').click();await page.locator('[data-action="seat"][data-label="A02"]').click();await page.locator('[data-action="checkout"]').click();
+    await page.locator('#checkout-form').waitFor();assert.equal(await page.locator('#return-pickup').count(),1);
+    await page.reload();await page.locator('#checkout-form').waitFor();assert.equal(await page.locator('#return-pickup').count(),1,'Both held legs survive refresh');
+    // Move this isolated fixture's clocks forward to exercise expiry without a five-minute wait.
+    const expiredAt=new Date(Date.now()-60000).toISOString();
+    await runtime.api.db.transaction(tx=>tx.run('UPDATE seat_holds SET expires_at=?',[expiredAt]));
+    await page.evaluate(expiry=>{for(const key of ['ticket4t_checkout','ticket4t_journey']){const data=JSON.parse(sessionStorage.getItem(key)||'null');if(!data)continue;if(data.hold)data.hold.expiresAt=expiry;for(const leg of data.legs||[])if(leg.hold)leg.hold.expiresAt=expiry;sessionStorage.setItem(key,JSON.stringify(data));}},expiredAt);
+    await page.reload();await page.locator('#checkout-form').waitFor();assert.ok(await page.locator('#book-button').isDisabled(),'Expired holds cannot be submitted');
+    await page.locator('[data-action="renew-holds"]').click();await page.waitForFunction(()=>!document.querySelector('#book-button').disabled);assert.match(await page.locator('[data-hold-clock]').first().innerText(),/\d/);
+    await page.fill('#fullName','Khách khứ hồi kiểm thử');await page.fill('#phone','0910000111');await page.fill('#email','roundtrip@example.test');
+    await page.fill('#coupon-code','HETLUOT');await page.locator('[data-action="apply-coupon"]').click();await page.waitForFunction(()=>document.querySelector('#coupon-feedback')?.classList.contains('coupon-error'));
+    assert.match(await page.locator('#coupon-feedback').innerText(),/hết lượt|giới hạn/);
+    await page.fill('#coupon-code','KHUHOI10');await page.locator('[data-action="apply-coupon"]').click();await page.waitForFunction(()=>document.querySelector('#coupon-feedback')?.classList.contains('coupon-success'));
+    await page.check('#checkout-form [name="consent"]');await page.screenshot({path:path.join(output,'checkout-roundtrip-desktop.png'),fullPage:true});
+    const orderResponse=page.waitForResponse(r=>r.url().endsWith('/api/orders')&&r.request().method()==='POST');await page.click('#book-button');const created=await(await orderResponse).json();
+    assert.ok(created.order?.code,JSON.stringify(created));assert.equal(created.order.bookings.length,2);assert.equal(created.order.discount,Math.floor(created.order.subtotal*.1));assert.equal(created.order.bookings.reduce((n,b)=>n+b.total,0),created.order.total);
+    await page.locator('.order-booking').first().waitFor();await page.screenshot({path:path.join(output,'order-roundtrip-desktop.png'),fullPage:true});
+    const returnBooking=created.order.bookings[1];
+    await page.goto(base+'/#/reschedule/'+returnBooking.code+'?phone=0910000111');await page.locator('#reschedule-search-form').waitFor();await page.fill('#reschedule-date',changeDate);await page.locator('#reschedule-search-form button[type="submit"]').click();
+    await page.locator('.trip-card .btn').first().waitFor();await page.locator('.trip-card .btn').first().click();await page.locator('[data-action="seat"]:enabled').first().waitFor();
+    await page.locator('[data-action="seat"][data-label="A03"]').click();await page.locator('[data-action="seat"][data-label="A04"]').click();await page.locator('[data-action="checkout"]').click();await page.locator('#reschedule-confirm-form').waitFor();await page.check('#reschedule-confirm-form input[type="checkbox"]');
+    const changedResponse=page.waitForResponse(r=>r.url().endsWith('/reschedule')&&r.request().method()==='POST');await page.click('#book-button');const changed=await(await changedResponse).json();assert.ok(changed.booking?.tripId,JSON.stringify(changed));assert.notEqual(changed.booking.tripId,returnBooking.tripId);assert.deepEqual(changed.booking.seats,['A03','A04']);
+    const oldTrip=await(await fetch(base+'/api/trips/'+returnBooking.tripId)).json();assert.equal(oldTrip.seats.find(s=>s.label==='A01').status,'available');
+    await page.goto(base+'/#/tickets');await page.locator('#lookup-form').waitFor();await page.fill('#lookup-form [name="code"]',created.order.code);await page.fill('#lookup-form [name="phone"]','0910000111');await page.locator('#lookup-form button[type="submit"]').click();await page.locator('.order-booking').first().waitFor();
+    await page.locator('.order-booking .btn').first().click();await page.locator('[data-action="cancel-booking"]').waitFor();await page.locator('[data-action="cancel-booking"]').click();await page.click('#modal-confirm');await page.getByText('Đã hủy',{exact:true}).first().waitFor();
+    const lookup=await(await fetch(base+'/api/orders/lookup?code='+created.order.code+'&phone=0910000111')).json();assert.equal(lookup.order.status,'partially_cancelled');assert.equal(lookup.order.activeTotal,changed.booking.total);
+    await page.setViewportSize({width:390,height:844});await page.goto(base+'/#/order/'+created.order.code+'?phone=0910000111');await page.locator('.order-booking').first().waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Mobile round-trip receipt fits');await page.screenshot({path:path.join(output,'order-roundtrip-mobile.png'),fullPage:true});
+    await page.goto(base);await page.locator('#search-form').waitFor();await page.check('input[name="tripMode"][value="roundtrip"]');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Mobile round-trip search fits');await page.screenshot({path:path.join(output,'home-roundtrip-mobile.png'),fullPage:true});
+
+    const admin=await browser.newPage({viewport:{width:1440,height:1000}});instrument(admin);await admin.goto(base+'/admin');await admin.fill('#login-form [name="email"]','admin@ticket4t.vn');await admin.fill('#login-form [name="password"]','Admin@12345');await admin.locator('#login-form button[type="submit"]').click();await admin.locator('#portal').waitFor({state:'visible'});
+    await admin.locator('[data-page="promotions"]').click();await admin.locator('[data-action="new-promotion"]').waitFor();assert.match(await admin.locator('#content').innerText(),/TEST50K/);
+    await admin.locator('[data-action="new-promotion"]').click();await admin.fill('#editor-form [name="code"]','UIV3TEST');await admin.fill('#editor-form [name="title"]','Ưu đãi kiểm thử giao diện');await admin.selectOption('#editor-form [name="type"]','fixed');await admin.fill('#editor-form [name="value"]','25000');
+    const promoResponse=admin.waitForResponse(r=>r.url().endsWith('/api/admin/promotions')&&r.request().method()==='POST');await admin.locator('#editor-form button[type="submit"]').click();assert.equal((await promoResponse).status(),201);await admin.locator('#editor-dialog').waitFor({state:'hidden'});await admin.getByText('UIV3TEST',{exact:true}).waitFor();await admin.screenshot({path:path.join(output,'promotions-admin-desktop.png'),fullPage:true});
+    await admin.locator('[data-page="trips"]').click();await admin.locator('#filters').waitFor();await admin.fill('#filters [name="date"]',changeDate);await admin.selectOption('#filters [name="from"]','da-lat');await admin.selectOption('#filters [name="to"]','ho-chi-minh');await admin.locator('#filters button[type="submit"]').click();await admin.locator(`[data-action="manifest"][data-id="${changed.booking.tripId}"]`).waitFor();await admin.locator(`[data-action="manifest"][data-id="${changed.booking.tripId}"]`).click();await admin.locator('.manifest-table').waitFor();assert.match(await admin.locator('#manifest-content').innerText(),/Khách khứ hồi kiểm thử/);assert.match(await admin.locator('#manifest-content').innerText(),/A03, A04/);await admin.screenshot({path:path.join(output,'manifest-admin-desktop.png'),fullPage:true});
+    const staff=await browser.newPage({viewport:{width:1440,height:1000}});instrument(staff);await staff.goto(base+'/admin');await staff.fill('#login-form [name="email"]','operator@ticket4t.vn');await staff.fill('#login-form [name="password"]','Nhaxe@12345');await staff.locator('#login-form button[type="submit"]').click();await staff.locator('#portal').waitFor({state:'visible'});assert.equal(await staff.locator('[data-page="promotions"]:visible').count(),0,'Operator cannot manage global promotions');
+    assert.deepEqual(failures,[],'No browser errors, blocked scripts, or missing assets');
+    console.log('Advanced UI passed: round-trip holds, draft refresh, valid/expired quota coupons, atomic order, guest reschedule, partial cancellation, saved/compared trips, admin promotions/manifest and mobile layouts.');
+  } catch(error) {console.error(error);process.exitCode=1;}
+  finally {await browser.close();await new Promise(r=>server.close(r));await runtime.close();await fs.rm(dataDir,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exitCode=1;});
