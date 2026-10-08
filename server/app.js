@@ -15,6 +15,7 @@ const {getIntegrationStatus}=require('./integration-status');
 const {fetchOperatorFeed}=require('./operator-feed');
 const {createWalletPayments}=require('./wallet-payments');
 const {times,parseSearchQuery,literalSearchPattern,normalizedTextSql,tripTextSql,ratingSql,availableSeatsQuery}=require('./search');
+const {bookingTermsVersion}=require('./booking-terms');
 
 class ApiError extends Error { constructor(status,message,code='VALIDATION_ERROR') { super(message); this.status = status; this.code = code; } }
 function fail(status,message,code) { throw new ApiError(status,message,code); }
@@ -216,7 +217,7 @@ async function createApi(options={}) {
     if (env.NODE_ENV === 'production' && trip.source === 'demo') fail(404,'Không tìm thấy chuyến xe.','NOT_FOUND');
     const seats=makeSeats(trip.type,trip.totalSeats).map(s => ({...s,price:trip.seatPrices?.[s.label] ?? trip.price,status:states[s.label] || (holds[s.label] ? 'held' : 'available'),ownHold:Boolean(holds[s.label] && features.ownsHold(req,holds[s.label]))}));
     const availablePrices=seats.filter(seat=>seat.status==='available').map(seat=>seat.price);
-    res.json({...trip,seats,minAvailablePrice:availablePrices.length ? Math.min(...availablePrices) : null,maxAvailablePrice:availablePrices.length ? Math.max(...availablePrices) : null});
+    res.json({...trip,seats,bookingVersion:bookingTermsVersion(trip),minAvailablePrice:availablePrices.length ? Math.min(...availablePrices) : null,maxAvailablePrice:availablePrices.length ? Math.max(...availablePrices) : null});
   }));
   router.get('/operators',endpoint(async (req,res) => {
     const rows=await db.all('SELECT data FROM operators WHERE active=1 ORDER BY name'); res.json({operators:rows.map(r => parse(r.data)).filter(op => env.NODE_ENV !== 'production' || op.source !== 'demo')});

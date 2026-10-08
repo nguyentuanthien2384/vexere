@@ -3,6 +3,7 @@
 const crypto=require('node:crypto');
 const {makeSeats}=require('./catalog');
 const {checkoutIdempotency}=require('./checkout-idempotency');
+const {bookingTermsVersion,validateBookingVersion,validateExpectedTotal}=require('./booking-terms');
 const BOOKING_LEAD_MINUTES=30;
 
 function createBookingFeatures(ctx) {
@@ -26,6 +27,7 @@ function createBookingFeatures(ctx) {
   function validateLeg(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || !clean(input.tripId)) fail(400,'Thông tin chuyến xe không hợp lệ.');
     validateSeats(input.seats);
+    validateBookingVersion(input.expectedBookingVersion,fail);
   }
   async function lockTrips(tx,ids) {
     const rows=new Map();
@@ -46,6 +48,7 @@ function createBookingFeatures(ctx) {
     validateLeg(input);
     const trip=await getTrip(clean(input.tripId),tx,{activeOnly:true});
     if (!trip || (env.NODE_ENV === 'production' && trip.source === 'demo')) fail(404,'Chuyến xe không còn mở bán.','NOT_FOUND');
+    if (input.expectedBookingVersion !== undefined && input.expectedBookingVersion !== bookingTermsVersion(trip)) fail(409,'Thông tin hoặc giá chuyến xe đã thay đổi. Vui lòng kiểm tra và xác nhận lại.','TRIP_CHANGED');
     const departureAt=Date.parse(trip.date+'T'+trip.departureTime+':00+07:00');
     if (departureAt<=Date.now()+minLeadMinutes*60000) fail(409,'Chuyến xe đã khởi hành hoặc quá gần giờ khởi hành.','DEPARTED');
     const labels=makeSeats(trip.type,trip.totalSeats).map(s => s.label);
@@ -133,6 +136,7 @@ function createBookingFeatures(ctx) {
           return {bookings:await Promise.all(saved.bookingCodes.map(code=>getBooking(code,tx))),order:saved.orderCode ? await getOrder(saved.orderCode,tx) : null,replayed:true};
         }
       }
+      const expectedTotal=validateExpectedTotal(input.expectedTotal,fail);
       if (fullName.length<2 || (!(staff && !email) && !validEmail(email)) || !validPhone(mobile)) fail(400,'Thông tin hành khách không hợp lệ.');
       if (!['cash','vnpay','momo','zalopay'].includes(input.paymentMethod)) fail(400,'Phương thức thanh toán không hợp lệ.');
       if(staff && (asOrder || input.paymentMethod!=='cash'))fail(400,'Bán vé tại quầy hiện hỗ trợ một chuyến, thanh toán tiền mặt.','PAYMENT_UNSUPPORTED');
@@ -151,6 +155,7 @@ function createBookingFeatures(ctx) {
       if(staff)for(const leg of legs)scope(req,leg.trip.operatorId);
       if (asOrder) roundTrip(legs);
       const prices=await quote(tx,legs,input.couponCode,mobile,{consume:true});
+      if (expectedTotal !== undefined && expectedTotal !== prices.total) fail(409,'Giá hoặc ưu đãi đã thay đổi. Vui lòng kiểm tra tổng tiền và xác nhận lại.','PRICE_CHANGED');
       if (input.paymentMethod==='momo' && (prices.total<1000 || prices.total>50000000)) fail(400,'MoMo hỗ trợ số tiền từ 1.000 đến 50.000.000 VND. Vui lòng chọn phương thức khác.','PAYMENT_AMOUNT_UNSUPPORTED');
       const bookingItems=[],createdAt=now();
       if (asOrder) await tx.run('INSERT INTO orders(code,user_id,phone,email,subtotal,discount,total,coupon_code,created_at,data) VALUES(?,?,?,?,?,?,?,?,?,?)',[orderCode,req.user?.id || null,mobile,email,prices.subtotal,prices.discount,prices.total,prices.couponCode,createdAt,JSON.stringify({fullName,bookingCodes,source:legs.some(l => l.trip.source === 'demo') ? 'demo' : 'managed'})]);
@@ -184,20 +189,30 @@ function createBookingFeatures(ctx) {
     return ctx.mail({to:booking.email,subject:'Đặt chỗ Ticket4T '+(order?.code || booking.code),text:'Xin chào '+booking.fullName+'\n'+(order ? 'Mã đơn khứ hồi: '+order.code+'\n' : '')+itinerary+(order ? '\nTổng đơn: '+order.total+' VND' : '')+'\nTrạng thái: chưa thanh toán.\n'+(bookings.some(item=>item.source === 'demo') ? 'ĐÂY LÀ DỮ LIỆU MẪU; không phải vé nhà xe thật.' : 'Vui lòng xác nhận thông tin với nhà xe.')});
   }
   function installPublic(router) {
+    router.post('/holds/session',endpoint(async (req,res)=>{owner(req);res.json({ready:true});}));
     router.post('/holds',endpoint(async (req,res) => {
-      const input=req.body; validateLeg(input); const tripId=clean(input.tripId),ownerKey=owner(req),token=crypto.randomBytes(32).toString('hex'),holdHash=hash(token);
+      const input=req.body; validateLeg(input);
+      if (input.expectedHoldToken !== undefined && input.expectedHoldToken !== null && (typeof input.expectedHoldToken !== 'string' || input.expectedHoldToken.length !== 64 || !/^[a-f0-9]{64}$/.test(input.expectedHoldToken))) fail(400,'Mã giữ chỗ cần thay thế không hợp lệ.');
+      const expectedHash=input.expectedHoldToken === undefined || input.expectedHoldToken === null ? null : hash(input.expectedHoldToken);
+      const tripId=clean(input.tripId),ownerKey=owner(req),token=crypto.randomBytes(32).toString('hex'),holdHash=hash(token);
       const hold=await db.transaction(async tx => {
         if (db.dialect === 'postgres') await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',[ownerKey]);
         await lockTrips(tx,[tripId]); await expire(tx,tripId);
         const guestKey=req.session?.holdOwner ? 'guest:'+req.session.holdOwner : ownerKey;
+        const old=await tx.all('SELECT hash,data FROM seat_holds WHERE trip_id=? AND (owner_key=? OR owner_key=?)',[tripId,ownerKey,guestKey]);
+        if (input.expectedHoldToken !== undefined && old.some(row=>{
+          if (row.hash === expectedHash) return false;
+          const data=parse(row.data);
+          return !Object.prototype.hasOwnProperty.call(data,'renewalPredecessorHash') || data.renewalPredecessorHash !== expectedHash || JSON.stringify(data.seats) !== JSON.stringify(input.seats);
+        })) fail(409,'Giữ chỗ đã thay đổi. Vui lòng kiểm tra lựa chọn hiện tại.','HOLD_CHANGED');
         const other=await tx.get('SELECT COUNT(*) AS n FROM seat_holds WHERE (owner_key=? OR owner_key=?) AND trip_id<>? AND expires_at>?',[ownerKey,guestKey,tripId,now()]);
         if (Number(other.n)>=2) fail(429,'Chỉ được giữ ghế tối đa hai chuyến cùng lúc.','HOLD_LIMIT');
         // Replacing a user's previous hold on the same trip is atomic, without extending any other user's hold.
-        const old=await tx.all('SELECT hash FROM seat_holds WHERE trip_id=? AND (owner_key=? OR owner_key=?)',[tripId,ownerKey,guestKey]);
         for (const row of old) await clearHold(tx,row.hash);
         const leg=await legInfo(tx,input,{requirePoints:false});
         const expiresAt=new Date(Math.min(Date.now()+5*60000,leg.departureAt-BOOKING_LEAD_MINUTES*60000)).toISOString();
-        await tx.run('INSERT INTO seat_holds(hash,trip_id,owner_key,expires_at,data) VALUES(?,?,?,?,?)',[holdHash,tripId,ownerKey,expiresAt,JSON.stringify({seats:input.seats})]);
+        const data={seats:input.seats,...(input.expectedHoldToken !== undefined ? {renewalPredecessorHash:expectedHash} : {})};
+        await tx.run('INSERT INTO seat_holds(hash,trip_id,owner_key,expires_at,data) VALUES(?,?,?,?,?)',[holdHash,tripId,ownerKey,expiresAt,JSON.stringify(data)]);
         for (const seat of input.seats) await tx.run('INSERT INTO hold_seats(trip_id,seat,hold_hash) VALUES(?,?,?)',[tripId,seat,holdHash]);
         return {token,tripId,seats:input.seats,expiresAt};
       }); res.status(201).json({hold});

@@ -17,6 +17,7 @@
     "test:postgres": "node scripts/run-tests.js postgres",
     "test:ui:all": "node scripts/run-ui-tests.js",
     "test:ui:search": "node scripts/browser-search-smoke.js",
+    "test:ui:checkout": "node scripts/browser-checkout-smoke.js",
     "test:ui": "node scripts/browser-smoke.js",
     "test:ui:advanced": "node scripts/browser-advanced-smoke.js",
     "test:ui:regression": "node scripts/browser-regression-smoke.js",

@@ -1,5 +1,20 @@
 # Kết quả kiểm tra bản 3 — 07/10/2026
 
+## Giữ ghế, xác nhận giá và phục hồi checkout — 08/10/2026
+
+- Chi tiết chuyến có `bookingVersion`; giữ ghế, báo giá và đặt vé có thể gửi `expectedBookingVersion`. Máy chủ kiểm tra dưới khóa chuyến; giá/lịch/điểm đón thay đổi trả `409 TRIP_CHANGED` trước khi tác động kho. Client cũ thiếu trường mới vẫn tương thích.
+- Checkout gửi `expectedTotal` là tổng khách xác nhận. Ưu đãi đổi làm tổng khác sẽ trả `409 PRICE_CHANGED`, rollback đơn/vé/kho/quota/key/email; yêu cầu đã lưu vẫn replay bằng đúng body/key ban đầu kể cả ưu đãi đổi sau đó.
+- Browser thiết lập cookie khách qua `/holds/session` trước lần giữ ghế đầu; retry sau mất phản hồi thay giữ chỗ cùng phiên trong giao dịch. Không nhả giữ cũ trước khi thay lựa chọn.
+- Gia hạn từng chiều hết hiệu lực, bảo toàn chiều còn hạn. Khi chiều thứ hai lỗi hoặc phản hồi đến sau khi đổi bản nháp, chỉ dọn các giữ chỗ mới của lần gia hạn đó. `expectedHoldToken` chặn yêu cầu cũ đến máy chủ chậm thay lựa chọn mới trên cùng chuyến; bản băm token tiền nhiệm và danh sách ghế cho phép retry đúng lần gia hạn bị mất phản hồi, kể cả sau reload. Giá/điểm đón trả mới được hiển thị, ưu đãi cũ và đồng ý cũ bị bỏ để khách kiểm tra lại.
+- Giữ thông tin hành khách trong bản nháp cùng hành trình khi reload, sửa ghế hoặc gia hạn; bỏ dữ liệu liên hệ, yêu cầu chưa rõ kết quả và số điện thoại thanh toán khi đăng xuất/đổi tài khoản. Tải lại tab sau khi tab khác đổi tài khoản cũng kiểm tra chủ bản nháp. Phản hồi checkout cũ không ghi dữ liệu hoặc điều hướng tài khoản mới. Cập nhật ghế theo từng chuyến, tránh yêu cầu chuyến cũ chặn hoặc ghi đè chuyến mới.
+- Thêm **10 unit + 16 API + 15 tình huống browser**. `npm run test:ci` đạt **249/249** (93 unit, 156 integration/component/subprocess), không skip/todo; **79** file JS hợp lệ, **35** tình huống catalogue cùng 4 nhóm kết nối ngoài chưa chạy.
+- Coverage backend SQLite: **97,26% dòng, 88,27% nhánh, 94,97% hàm**, đạt gate 95/85/90. Module phiên bản điều kiện chuyến đạt 100% dòng/hàm và 95,45% nhánh; số này không bao gồm browser hoặc dịch vụ ngoài.
+- PostgreSQL **18.4** thực đạt **78/78** (19 backend, 20 nâng cao, 10 admin, 10 search, 16 hold-recovery, 3 database/session). Schema được dọn; cluster tạm riêng đã dừng và xóa thư mục. `npm run test:ui:all` đạt **8/8** bộ Chrome, gồm **15/15** ca checkout mới; không có lỗi JavaScript/CSP trong bộ mới. Ca mất phản hồi gia hạn kiểm tra cả reload và retry gặp `TRIP_CHANGED` trước khi giữ/đặt thành công.
+
+Hợp đồng tại [API](api.md), cách chạy tại [kiểm thử](testing.md), truy vết tại [danh mục ca](test-cases.json). Toàn bộ kiểm thử dùng kho tạm; không đổi `.env` hoặc database đang bán vé. Chưa xác minh merchant/SMTP/API nhà xe thực, CI GitHub, PostgreSQL16/Docker hoặc tải vận hành lớn trong đợt này.
+
+Một fixture tái hiện lỗi riêng biệt còn tại `C:\Users\Admin\AppData\Local\Temp\ticket4t-feature-contracts-EUtb0u`: phê duyệt tự động từ chối thao tác xóa đệ quy với lý do `blocked by policy`. Không thử cách xóa khác; fixture chỉ chứa dữ liệu kiểm thử. Cluster PostgreSQL và các lượt kiểm thử hoàn tất vẫn được dọn như đã ghi ở trên.
+
 ## Phát triển tìm kiếm, lọc chuyến và giữ ngữ cảnh khứ hồi — 08/10/2026
 
 - API kiểm tra chặt tham số scalar, enum, ngày thật, mã địa điểm/nhà xe, khoảng giá và số nguyên phân trang. Tham số lặp/mảng/object, prototype names, NUL hoặc giá đảo trả 400; không còn lỗi 500 hay vô tình bỏ lọc. PostgreSQL nhận đúng các biên giá hữu hạn, kể cả fractional/lớn, nhờ bind kiểu numeric.

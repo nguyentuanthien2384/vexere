@@ -37,6 +37,7 @@ Không cần sửa file `.env` cũ để xem bản kiểm thử. Nếu muốn c�
 - Xem hành trình, giờ đến qua ngày tiếp theo, tiện ích, chính sách, điểm đón/trả và hồ sơ nhà xe.
 - Chọn nhiều ghế trên sơ đồ theo tầng; giá theo ghế nếu nhà xe cấu hình.
 - Giữ ghế tối đa 5 phút trước khi hoàn thành thông tin; bộ đếm và kiểm tra tồn ghế ở máy chủ. Tìm kiếm, giữ ghế, báo giá và đặt vé cùng đóng bán trước khởi hành 30 phút; thời hạn giữ không vượt mốc đóng bán. Hết hạn cần chọn lại, không đặt tiếp bằng ghế cũ.
+- Khôi phục giữ chỗ hết hạn theo từng chiều, giữ thông tin hành khách trong phiên và kiểm tra lại giá/ưu đãi trước khi xác nhận. Khi điều kiện chuyến hoặc tổng tiền đổi, khách cần xem và đồng ý lại; retry yêu cầu đã lưu vẫn dùng cùng khóa để tránh tạo vé trùng.
 - Đặt vé khứ hồi bằng một lần gửi; hai lượt được lưu trong cùng giao dịch. Nếu một lượt không còn ghế, cả đơn không được tạo. Khứ hồi hiện hỗ trợ thanh toán tại nhà xe.
 - Mã giảm giá cố định/phần trăm, mức đơn tối thiểu, trần giảm, thời hạn, hạn mức tổng/theo số điện thoại, điều kiện tuyến/nhà xe/khứ hồi.
 - So sánh tối đa ba chuyến và lưu chuyến yêu thích trên trình duyệt; giữ chiều đi/về, bộ lọc và lượt đi đang giữ ghế khi quay lại chọn chuyến khứ hồi. Đổi ngày trên cùng tuyến giữ bộ lọc và thứ tự sắp xếp.
@@ -100,6 +101,7 @@ npm run test:ci
 npm audit
 npm run test:ui:all
 npm run test:ui:search
+npm run test:ui:checkout
 npm run pack:project
 ```
 
@@ -107,7 +109,7 @@ ZIP nằm ở `artifacts/Ticket4T-project.zip`, chứa mã nguồn, tài nguyên
 
 `test:ui` mở Chrome headless, chạy trên database tạm riêng và kiểm tra tìm chuyến → chọn ghế → đặt/tra cứu/hủy vé cùng các trang quản trị. Cần cài Chrome; với trình duyệt Playwright riêng, cài `npx playwright install chromium` và đặt `BROWSER_CHANNEL=chromium`. Ảnh kiểm thử được lưu vào `artifacts/screenshots/`.
 
-Đã tách unit test khỏi API/database test. `test:ci` kiểm tra cú pháp, danh mục ca và toàn bộ backend với ngưỡng coverage 95% dòng, 85% nhánh, 90% hàm; xuất JUnit/JSON/LCOV vào `artifacts/tests/coverage/`. CI GitHub có job Node24 Ubuntu/Windows, PostgreSQL16 và Chromium. Xem [hướng dẫn kiểm thử](docs/testing.md) và [32 tình huống theo chức năng](docs/test-cases.json) để xem tiền điều kiện, bước và kết quả mong đợi; kết quả từng ca được sinh trong báo cáo JSON.
+Đã tách unit test khỏi API/database test. `test:ci` kiểm tra cú pháp, danh mục ca và toàn bộ backend với ngưỡng coverage 95% dòng, 85% nhánh, 90% hàm; xuất JUnit/JSON/LCOV vào `artifacts/tests/coverage/`. CI GitHub có job Node24 Ubuntu/Windows, PostgreSQL16 và Chromium. Xem [hướng dẫn kiểm thử](docs/testing.md) và [35 tình huống theo chức năng](docs/test-cases.json) để xem tiền điều kiện, bước và kết quả mong đợi; kết quả từng ca được sinh trong báo cáo JSON.
 
 Xem [tình huống và dữ liệu test](docs/test-scenarios.md) để thử mã ưu đãi, vé khứ hồi, các trạng thái thanh toán, chuyến hết ghế và tài khoản nhà xe. Dữ liệu tình huống được thêm một lần, giữ nguyên vé bạn đã tạo. `npm run seed` bổ sung kho chuyến, không xóa dữ liệu. Lộ trình và chứng từ mẫu đều có nhãn minh họa.
 

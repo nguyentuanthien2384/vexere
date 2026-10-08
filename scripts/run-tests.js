@@ -78,7 +78,7 @@ async function runPostgres() {
   try {
     // These suites opt in to TEST_DATABASE_URL. Other API suites deliberately
     // keep their per-case SQLite fixtures and are not reported as PostgreSQL.
-    const files = ['backend', 'advanced', 'admin', 'search-contracts'].map(name => path.join(root, 'tests', name + '.test.js'))
+    const files = ['backend', 'advanced', 'admin', 'search-contracts', 'hold-recovery'].map(name => path.join(root, 'tests', name + '.test.js'))
       .concat(discoverTestFiles(path.join(root, 'tests'), 'postgres'));
     for (const file of files) {
       const schema = 'ticket4t_test_' + crypto.randomBytes(12).toString('hex');

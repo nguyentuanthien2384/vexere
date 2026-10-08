@@ -4,7 +4,9 @@
 
 Trước đợt này, `npm test` có 98 ca đạt nhưng trộn test API, database, component và helper. Chưa có thư mục/unit command riêng, coverage gate, báo cáo máy đọc, CI hoặc danh mục ca theo chức năng. `test-scenarios.md` chủ yếu hướng dẫn thử dữ liệu demo bằng tay. Vì vậy chưa thể gọi là bộ unit test đầy đủ cho từng chức năng.
 
-Bộ hiện tại đạt 223 ca (83 unit độc lập, 140 integration/component/subprocess trên SQLite/HTTP), không skip/todo. PostgreSQL 18.4 thực đạt 62 ca: 49 backend/nâng cao/admin, 10 hợp đồng tìm chuyến và 3 database/session chuyên biệt. Bảy bộ UI đạt trên Chrome headless. Các tầng chồng lấn có chủ đích và không cộng 62 PostgreSQL vào 223 để báo số ca duy nhất.
+Bộ hiện tại đạt 249 ca (93 unit độc lập, 156 integration/component/subprocess trên SQLite/HTTP), không skip/todo. PostgreSQL 18.4 thực đạt 78 ca: 49 backend/nâng cao/admin, 10 hợp đồng tìm chuyến, 16 giữ chỗ/xác nhận giá và 3 database/session chuyên biệt. Tám bộ UI đạt trên Chrome headless, gồm 15 ca checkout mới. Các tầng chồng lấn có chủ đích và không cộng 78 PostgreSQL vào 249 để báo số ca duy nhất.
+
+Đợt giữ chỗ/checkout bổ sung 10 unit, 16 API và 15 tình huống browser. Kiểm tra phiên bản giá/lịch/điểm đón trước khi giữ và đặt; tổng tiền sau ưu đãi đúng số khách xác nhận; retry đúng body/key sau mất phản hồi. Browser kiểm tra phiên khách trước lần giữ đầu, chỉ gia hạn chiều hết hạn, rollback giữ mới khi chiều khác lỗi, bỏ phản hồi cũ khi đổi bản nháp và bảo vệ lựa chọn mới trên cùng chuyến bằng token kỳ vọng. Mất phản hồi gia hạn vẫn retry được sau reload bằng cùng token tiền nhiệm; đổi điều kiện trong lần retry không làm mất khả năng khôi phục. Cập nhật ghế theo chuyến; giữ dữ liệu hành khách trong cùng hành trình, xóa bản nháp liên hệ/yêu cầu chưa rõ kết quả/số điện thoại thanh toán khi đăng xuất hoặc đổi tài khoản, kể cả đổi ở tab khác rồi tải lại. Thay giá/điều kiện yêu cầu xem lại và đồng ý lại.
 
 Đợt tìm/lọc chuyến bổ sung 11 unit, 10 API và 13 tình huống browser. Kiểm tra scalar/enum/ngày/giá/phân trang, tiếng Việt không dấu/NFD, literal LIKE và NUL; giá của từng ghế đang trống, loại ghế đã đặt/giữ, giá theo khoảng và nguồn giá tuyến phổ biến; giữ ngữ cảnh khứ hồi qua đổi ngày/compare/favorites và chuyển chuyến đã lưu sang một chiều khi phiên mới hoặc hành trình khác. Admin từ chối bộ lọc tuyến sai trước khi tải để giữ bảng đang xem.
 
@@ -21,13 +23,14 @@ npm test                  # cả hai tầng, discovery đệ quy
 npm run test:cases        # kiểm tra danh mục và liên kết tới automation
 npm run test:coverage     # toàn bộ backend, gate và báo cáo
 npm run test:ci           # syntax + catalogue + coverage/test
-npm run test:ui:all       # lần lượt 7 browser suites
+npm run test:ui:all       # lần lượt 8 browser suites
 npm run test:ui:search    # 13 tình huống hồi quy tìm/lọc và khứ hồi
+npm run test:ui:checkout  # 15 tình huống giữ chỗ, giá, riêng tư và khôi phục checkout
 ```
 
-`tests/unit/` kiểm tra các hàm thuần và ranh giới có mock: ngày/lịch/ghế, tham số và chuẩn hóa tìm kiếm, CSV, khoảng ngày báo cáo, VNPAY và checkout fingerprint, cấu hình feed, mailer, discovery và teardown. Mock được phục hồi sau từng ca. Các handler API có closure và SQL được kiểm tra qua HTTP/database, không giả gọi chúng là unit test. `tests/database.test.js` kiểm tra SQLite thật, transaction/rollback, queue sau lỗi, foreign key, legacy schema, session store và đóng DB.
+`tests/unit/` kiểm tra các hàm thuần và ranh giới có mock: ngày/lịch/ghế, tham số và chuẩn hóa tìm kiếm, phiên bản điều kiện chuyến và tổng xác nhận, CSV, khoảng ngày báo cáo, VNPAY và checkout fingerprint, cấu hình feed, mailer, discovery và teardown. Mock được phục hồi sau từng ca. Các handler API có closure và SQL được kiểm tra qua HTTP/database, không giả gọi chúng là unit test. `tests/database.test.js` kiểm tra SQLite thật, transaction/rollback, queue sau lỗi, foreign key, legacy schema, session store và đóng DB.
 
-API fixtures dùng database/temp directory riêng; ca mới trong `feature-contracts.test.js` và `search-contracts.test.js` tạo mới theo từng case. Search opt in PostgreSQL dùng schema riêng từng ca, kiểm tra tên database test, không dùng public schema. Kiểm thử cạnh tranh dùng Promise/gate và assertion về kết quả/số bản ghi, không dùng sleep để đoán race. Các bộ cũ chia sẻ fixture trong cùng file, nên file là đơn vị độc lập của chúng. HTTP chỉ bind loopback và dùng port tự cấp. Transport ví/partner/email đều được giả lập, không chuyển tiền hoặc gọi SMTP thật.
+API fixtures dùng database/temp directory riêng; ca mới trong `feature-contracts.test.js`, `search-contracts.test.js` và `hold-recovery.test.js` tạo mới theo từng case. Search/hold-recovery opt in PostgreSQL dùng schema riêng từng ca, kiểm tra tên database test, không dùng public schema. Kiểm thử cạnh tranh dùng Promise/gate và assertion về kết quả/số bản ghi, không dùng sleep để đoán race. Các bộ cũ chia sẻ fixture trong cùng file, nên file là đơn vị độc lập của chúng. HTTP chỉ bind loopback và dùng port tự cấp. Transport ví/partner/email đều được giả lập, không chuyển tiền hoặc gọi SMTP thật.
 
 Lệnh thông thường bỏ `DATABASE_URL`, `TEST_DATABASE_URL`, `SQLITE_FILE`, `DATA_DIR` của shell khỏi môi trường con. `.env` ứng dụng không được dùng làm cấu hình database của fixture. PostgreSQL chỉ chạy bằng lệnh opt in riêng dưới đây.
 
@@ -35,7 +38,7 @@ Lệnh thông thường bỏ `DATABASE_URL`, `TEST_DATABASE_URL`, `SQLITE_FILE`,
 
 `artifacts/tests/<mode>/results.json` chứa mỗi ca: ID, tên, file/dòng, status, thời gian và summary. Ca mới có ID `UT-*`/`IT-*`; ca cũ nhận ID `AUTO-*` ổn định theo file+tên. JUnit ở `junit.xml`; coverage thêm `lcov.info`. Không parse output `spec` để suy ra kết quả. Native Node test runner dùng structured events; format báo cáo dựa trên [tài liệu Node.js 24](https://nodejs.org/docs/latest-v24.x/api/test.html).
 
-Coverage đo `index.js` và các file `server/**/*.js` được nạp. Ngưỡng toàn backend: **95% lines, 85% branches, 90% functions**; thấp hơn thì lệnh trả exit code khác 0. Không bỏ qua dòng/nhánh production để tăng số. Kết quả SQLite hiện tại: **97,21% lines, 87,89% branches, 94,87% functions**. `server/search.js` đạt 100% dòng/hàm và 95,28% nhánh. Chi tiết theo module nằm trong JSON/LCOV; `database.js` vẫn gồm nhánh PostgreSQL chưa chạy trong lệnh SQLite này, và startup/CLI trong `index.js` còn chưa phủ hết.
+Coverage đo `index.js` và các file `server/**/*.js` được nạp. Ngưỡng toàn backend: **95% lines, 85% branches, 90% functions**; thấp hơn thì lệnh trả exit code khác 0. Không bỏ qua dòng/nhánh production để tăng số. Kết quả SQLite hiện tại: **97,26% lines, 88,27% branches, 94,97% functions**. `server/search.js` đạt 100% dòng/hàm và 95,28% nhánh; `server/booking-terms.js` đạt 100% dòng/hàm và 95,45% nhánh. Chi tiết theo module nằm trong JSON/LCOV; `database.js` vẫn gồm nhánh PostgreSQL chưa chạy trong lệnh SQLite này, và startup/CLI trong `index.js` còn chưa phủ hết.
 
 Hai ca subprocess riêng xác minh runner thật trả exit code 1 khi assertion lỗi hoặc coverage dưới ngưỡng dù các assertion con đạt; JSON/JUnit/LCOV vẫn được sinh. Skip/todo của fixture âm tính được báo đúng và không tính `describe` thành test. Bộ chính vẫn không có skip/todo.
 
@@ -51,18 +54,18 @@ npm run test:postgres
 Remove-Item Env:TEST_DATABASE_URL
 ```
 
-Database phải có đoạn tên `test` riêng, như `ticket4t_test`; URL có `options` sẵn bị từ chối. Tài khoản cần quyền tạo/xóa schema. Runner lần lượt chạy `backend.test.js`, `advanced.test.js`, `admin.test.js`, `search-contracts.test.js`, `tests/postgres/*.test.js`; mỗi file có `search_path` riêng vào schema ngẫu nhiên, dọn trong `finally`. Search còn tách schema từng ca. Các suite khác vẫn SQLite, không được báo là đã chạy PostgreSQL. Không dùng database đang bán vé dù runner có schema riêng.
+Database phải có đoạn tên `test` riêng, như `ticket4t_test`; URL có `options` sẵn bị từ chối. Tài khoản cần quyền tạo/xóa schema. Runner lần lượt chạy `backend.test.js`, `advanced.test.js`, `admin.test.js`, `search-contracts.test.js`, `hold-recovery.test.js`, `tests/postgres/*.test.js`; mỗi file có `search_path` riêng vào schema ngẫu nhiên, dọn trong `finally`. Search và hold-recovery còn tách schema từng ca. Các suite khác vẫn SQLite, không được báo là đã chạy PostgreSQL. Không dùng database đang bán vé dù runner có schema riêng.
 
-Đợt này dùng cluster PostgreSQL 18.4 UTF8/locale C tạm riêng; 19+20+10+10+3 = 62 ca đạt. Bao gồm giá fractional/giá hữu hạn rất lớn không gây lỗi kiểu integer, chuẩn hóa tiếng Việt và từ chối NUL. Cluster đã dừng và thư mục riêng đã dọn. Không thay cluster/database của người dùng. CI đặt PostgreSQL 16 để khớp Docker Compose; phiên CI đó chưa chạy trên GitHub trong đợt này.
+Đợt này dùng cluster PostgreSQL 18.4 UTF8/locale C tạm riêng; 19+20+10+10+16+3 = 78 ca đạt. Bao gồm giá fractional/giá hữu hạn rất lớn không gây lỗi kiểu integer, chuẩn hóa tiếng Việt, từ chối NUL, rollback khi điều kiện/tổng xác nhận đổi, mất phản hồi giữ chỗ, gia hạn có điều kiện và replay checkout. Cluster đã dừng và thư mục riêng đã dọn. Không thay cluster/database của người dùng. CI đặt PostgreSQL 16 để khớp Docker Compose; phiên CI đó chưa chạy trên GitHub trong đợt này.
 
 ## Ca kiểm thử và truy vết chức năng
 
-[test-cases.json](test-cases.json) có 32 tình huống theo nhóm chức năng, mỗi tình huống có ID, priority, tiền điều kiện, đầu vào, bước thực hiện, kết quả mong đợi và file/ID automation. Danh sách **từng ca đã chạy** với status cụ thể được sinh từ test runner trong `results.json`; số test lấy từ summary, không đếm `describe` thành ca. [test-scenarios.md](test-scenarios.md) giữ hướng dẫn dữ liệu demo để thử bằng tay.
+[test-cases.json](test-cases.json) có 35 tình huống theo nhóm chức năng, mỗi tình huống có ID, priority, tiền điều kiện, đầu vào, bước thực hiện, kết quả mong đợi và file/ID automation. Danh sách **từng ca đã chạy** với status cụ thể được sinh từ test runner trong `results.json`; số test lấy từ summary, không đếm `describe` thành ca. [test-scenarios.md](test-scenarios.md) giữ hướng dẫn dữ liệu demo để thử bằng tay.
 
 Khi thêm hành vi: bổ sung ca vào tầng phù hợp, kiểm tra đầu vào/biên/âm tính hoặc cạnh tranh liên quan; cập nhật mapping và chạy `test:ci`. Không viết test chỉ lặp lại chi tiết implementation. Với sửa lỗi, ca phải tái hiện được lỗi trước thay đổi và kiểm tra behavior mong đợi sau sửa. Không commit `.env`, database hoặc outbox khách trong fixture/report.
 
 ## CI và phần chưa kiểm chứng
 
-[.github/workflows/tests.yml](../.github/workflows/tests.yml) có ba job: backend Node24 trên Ubuntu/Windows, PostgreSQL16 với service database test, Chromium cho bảy UI suites. Các job lưu báo cáo và ảnh kể cả khi lỗi. Workflow được thêm vào mã nguồn; cần push để có bằng chứng run GitHub thực. Không có lượt CI cloud nào được tuyên bố đạt trong báo cáo local.
+[.github/workflows/tests.yml](../.github/workflows/tests.yml) có ba job: backend Node24 trên Ubuntu/Windows, PostgreSQL16 với service database test, Chromium cho tám UI suites. Các job lưu báo cáo và ảnh kể cả khi lỗi. Workflow được thêm vào mã nguồn; cần push để có bằng chứng run GitHub thực. Không có lượt CI cloud nào được tuyên bố đạt trong báo cáo local.
 
 `pendingExternalCases` trong catalogue ghi rõ bốn nhóm chưa chạy: merchant sandbox với webhook public và đối soát, SMTP/mailbox kiểm soát, API nhà xe thực/ghế đa kênh, staging proxy/multiworker/tải lớn/backup và CI cloud. Chưa có credentials/hợp đồng môi trường kiểm thử cho ba kết nối ngoài. Mock hiện tại kiểm chứng logic nội bộ, không chứng nhận integration partner thực. Accessibility mới có nhãn/keyboard/layout assertions ở luồng chính; chưa audit WCAG toàn bộ, kiểm thử tải lớn, penetration test hay xác minh visual baseline.

@@ -230,9 +230,9 @@
       "id": "TC-POSTGRES-01", "feature": "PostgreSQL thực và khóa kho vé", "priority": "P0",
       "preconditions": "TEST_DATABASE_URL trỏ database riêng tên có test; runner tạo schema ngẫu nhiên cho từng file.",
       "input": "Commit/rollback, 8 unique/seat contenders, reservation/hold/coupon/receipt và session.",
-      "steps": ["Chạy npm run test:postgres qua năm bộ đã opt in, gồm search-contracts.", "Kiểm tra reports từng file và schema từng ca search đã dọn."],
+      "steps": ["Chạy npm run test:postgres qua sáu bộ đã opt in, gồm search-contracts và hold-recovery.", "Kiểm tra reports từng file và schema từng ca search/hold-recovery đã dọn."],
       "expected": "Không bán/thu/tiêu quota trùng; rollback và pool còn dùng được; session đúng; schema test bị xóa sau mỗi bộ, không dùng public schema.",
-      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "tests/search-contracts.test.js", "ids": ["IT-SEARCH-"]}, {"file": "tests/postgres/database.test.js", "ids": ["IT-PG-"]}]
+      "automation": [{"file": "tests/backend.test.js"}, {"file": "tests/advanced.test.js"}, {"file": "tests/admin.test.js"}, {"file": "tests/search-contracts.test.js", "ids": ["IT-SEARCH-"]}, {"file": "tests/hold-recovery.test.js", "ids": ["IT-HOLD-REC-"]}, {"file": "tests/postgres/database.test.js", "ids": ["IT-PG-"]}]
     },
     {
       "id": "TC-WEB-01", "feature": "Ranh giới web, production và dữ liệu mẫu", "priority": "P0",
@@ -246,9 +246,33 @@
       "id": "TC-UI-01", "feature": "Điều hướng khách, responsive và phản hồi trễ", "priority": "P1",
       "preconditions": "Chrome headless với kho test riêng, viewport desktop/mobile.",
       "input": "Storage sai cấu trúc, đổi route/date/coupon, keyboard Escape, menu/filter mobile.",
-      "steps": ["Chạy toàn bộ bảy browser suites.", "Kiểm tra search/checkout/lookup/admin, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
+      "steps": ["Chạy toàn bộ tám browser suites.", "Kiểm tra search/checkout/lookup/admin, phục hồi reload và giữ focus.", "Kiểm tra scrollWidth, bounds của modal/input và uncaught page errors."],
       "expected": "Luồng chính chạy được, không blank screen/overflow; phản hồi trễ không đổi trạng thái mới; keyboard/modal hoạt động; screenshots lưu để xem thủ công, không phải visual baseline tự động.",
-      "automation": [{"file": "scripts/browser-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-admin-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-integrations-smoke.js"}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-"]}]
+      "automation": [{"file": "scripts/browser-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}, {"file": "scripts/browser-regression-smoke.js"}, {"file": "scripts/browser-admin-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-integrations-smoke.js"}, {"file": "scripts/browser-search-smoke.js", "ids": ["UI-SRCH-"]}, {"file": "scripts/browser-checkout-smoke.js", "ids": ["UI-CHECK-"]}]
+    },
+    {
+      "id": "TC-HOLD-02", "feature": "Giữ ghế theo điều kiện đã xem và khôi phục sau mất phản hồi", "priority": "P0",
+      "preconditions": "Kho managed riêng; phiên khách được thiết lập trước khi giữ; ghế đang chọn và điều kiện chuyến có thể đổi trước khi giữ.",
+      "input": "expectedBookingVersion đúng/sai/malformed, expectedHoldToken cũ/đúng/null/malformed, giá/lịch thay đổi, mất phản hồi giữ ghế đầu tiên sau commit, thay ghế có xung đột.",
+      "steps": ["Lấy bookingVersion từ chi tiết, thay giá hoặc lịch rồi thử giữ với phiên bản cũ.", "Thiết lập /holds/session, bỏ phản hồi /holds đã commit và thử giữ lại cùng cookie.", "Thay ghế cùng phiên với ghế của khách khác rồi kiểm tra giữ chỗ cũ.", "Giữ lựa chọn mới trên cùng chuyến, sau đó cho yêu cầu gia hạn với expectedHoldToken cũ đến máy chủ."],
+      "expected": "Điều kiện đổi trả TRIP_CHANGED và không tạo hoặc làm mất giữ chỗ cũ; client phải xem lại trước khi giữ; retry giữ ghế với phiên đã có thay nguyên tử giữ chỗ của mình, không kẹt bởi ghế của chính mình; gia hạn cũ gặp giữ mới trả HOLD_CHANGED, bảo toàn lựa chọn mới; client cũ không gửi phiên bản vẫn tương thích.",
+      "automation": [{"file": "tests/unit/booking-terms.test.js", "ids": ["UT-TERMS-"]}, {"file": "tests/hold-recovery.test.js"}, {"file": "scripts/browser-checkout-smoke.js"}]
+    },
+    {
+      "id": "TC-CHECKOUT-01", "feature": "Xác nhận tổng tiền và ưu đãi trước khi tạo đơn", "priority": "P0",
+      "preconditions": "Khách có giữ ghế còn hạn và báo giá ưu đãi đã xem; admin có thể thay giá trị ưu đãi trước checkout.",
+      "input": "expectedTotal đúng/sai/malformed, coupon đổi từ 50% sang 20%, một chiều/khứ hồi, Idempotency-Key và body xác nhận cũ.",
+      "steps": ["Đổi ưu đãi rồi gửi tổng đã xác nhận cũ.", "Kiểm tra không có đơn/vé/ghế đặt/lượt ưu đãi hoặc khóa chống trùng mới bị tiêu thụ.", "Xem và xác nhận tổng mới; sau commit thử lại đúng cùng body/key khi ưu đãi lại thay đổi."],
+      "expected": "Tổng khác trả PRICE_CHANGED và rollback; UI giữ thông tin khách, yêu cầu kiểm tra ưu đãi và đồng ý lại; xác nhận mới tạo đúng tổng từ máy chủ; retry yêu cầu đã lưu trả cùng đơn, không tạo hoặc thu trùng, không bị chặn bởi báo giá mới.",
+      "automation": [{"file": "tests/unit/booking-terms.test.js", "ids": ["UT-TERMS-"]}, {"file": "tests/hold-recovery.test.js"}, {"file": "scripts/browser-checkout-smoke.js"}, {"file": "scripts/browser-api-smoke.js"}]
+    },
+    {
+      "id": "TC-UI-02", "feature": "Khôi phục giữ chỗ, bản nháp hành khách và phản hồi ghế muộn", "priority": "P0",
+      "preconditions": "Phiên browser riêng, bản nháp một chiều/khứ hồi; kiểm soát hết hạn server/client và phản hồi qua network gates.",
+      "input": "Một/hai chiều hết giữ, ghế bị khách khác giữ, lỗi lượt giữ lại thứ hai, đổi giá sau hết giữ, phản hồi muộn khi chuyển bản nháp hoặc chuyến, tải lại form chưa gửi, đăng xuất/đổi tài khoản khi còn bản nháp hoặc yêu cầu chưa rõ kết quả.",
+      "steps": ["Điền thông tin khách, làm hold hết hạn ở server rồi kiểm tra và giữ lại.", "Cho một chiều khứ hồi lỗi trong khi chiều kia còn hạn; kiểm tra giữ chỗ còn hạn không bị nhả.", "Cho giữ lại lần hai lỗi hoặc phản hồi đến sau điều hướng; kiểm tra cleanup giữ mới và bản nháp đang xem.", "Giữ phản hồi cập nhật chuyến A rồi mở chuyến B và cập nhật B; tải lại và sửa ghế sau khi nhập thông tin khách.", "Đăng xuất/đổi tài khoản khi checkout mất phản hồi hoặc phản hồi chậm; kiểm tra tài khoản mới không nhận thông tin khách hay kết quả cũ."],
+      "expected": "Giữ lại chỉ xử lý lượt hết hạn, không mất lượt còn hạn; lỗi/stale cleanup đúng giữ mới; giá/điểm đón được cập nhật và ưu đãi/đồng ý cũ bị vô hiệu khi điều kiện đổi; dữ liệu hành khách được giữ trong cùng hành trình và xóa khi đổi danh tính; phản hồi cũ không ghi đè hoặc chặn cập nhật chuyến mới; retry checkout chưa rõ kết quả cùng danh tính vẫn giữ đúng body/key.",
+      "automation": [{"file": "scripts/browser-checkout-smoke.js", "ids": ["UI-CHECK-"]}, {"file": "scripts/browser-api-smoke.js"}, {"file": "scripts/browser-advanced-smoke.js"}]
     },
     {
       "id": "TC-TOOLING-01", "feature": "Test runner, báo cáo và teardown", "priority": "P1",
