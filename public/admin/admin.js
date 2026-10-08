@@ -24,6 +24,9 @@ const pages = {
   integrations: ['Kết nối API','DỮ LIỆU & THANH TOÁN','Kiểm tra cấu hình kết nối và đồng bộ lịch chạy từ đối tác.'],
 };
 const state = {user:null,locations:[],operators:[],routes:[],promotions:[],users:[],trips:[],bookings:[],audit:[],page:'dashboard',pageNumber:1,stats:null,editor:null,importTrips:null,manifest:null,loadId:0,sessionId:0,filters:{},importBusy:false,confirm:null};
+const rescheduleRecovery = window.TicketAdminRescheduleRecovery;
+const rescheduleAttemptKey = 'ticket4t_admin_reschedule_attempt';
+let rescheduleAttempt = null;
 const auditLabels = {user_created:'Cấp tài khoản',user_updated:'Đổi thông tin / quyền tài khoản',operator_created:'Thêm nhà xe',operator_updated:'Cập nhật nhà xe',operator_deactivated:'Ngừng hoạt động nhà xe',trip_created:'Thêm chuyến',trip_updated:'Cập nhật chuyến',trip_deactivated:'Ngừng bán chuyến',trip_duplicated:'Sao chép chuyến',trips_imported:'Nhập lịch trình',booking_confirmed:'Xác nhận vé',booking_cancelled:'Hủy vé',counter_booking_created:'Bán vé tại quầy',cash_received:'Ghi nhận thu tiền mặt',refund_recorded:'Ghi nhận hoàn tiền',booking_rescheduled:'Đổi chuyến',promotion_created:'Tạo ưu đãi',promotion_updated:'Cập nhật ưu đãi',promotion_deactivated:'Tạm dừng ưu đãi'};
 const entityLabels = {user:'Tài khoản',operator:'Nhà xe',trip:'Chuyến xe',import:'Đợt nhập',booking:'Đơn vé',promotion:'Ưu đãi'};
 auditLabels.operator_feed_synced = 'Đồng bộ API nhà xe';
@@ -45,21 +48,22 @@ async function api(path, options = {}) {
   const sessionId = state.sessionId;
   const response = await fetch(`/api${path}`, {
     credentials:'same-origin',
-    headers:{Accept:'application/json', ...(options.body ? {'Content-Type':'application/json'} : {})},
     ...options,
-    ...(options.body ? {body:JSON.stringify(options.body)} : {}),
+    headers:{Accept:'application/json', ...(options.body ? {'Content-Type':'application/json'} : {}),...options.headers},
+    ...(options.body ? {body:typeof options.body === 'string' ? options.body : JSON.stringify(options.body)} : {}),
   });
   let data;
-  try { data = await response.json(); } catch { throw new Error('Máy chủ chưa sẵn sàng. Vui lòng thử lại.'); }
+  try { data = await response.json(); } catch { if (response.status === 401 && state.user && sessionId === state.sessionId) showLogin('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'); const error = new Error('Máy chủ chưa sẵn sàng. Vui lòng thử lại.'); error.status = response.status; error.ambiguous = true; throw error; }
   if (!response.ok) {
     if (response.status === 401 && state.user && sessionId === state.sessionId) showLogin('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
     if (response.status === 403 && state.user && sessionId === state.sessionId) {
       try {
         const sessionResponse = await fetch('/api/auth/me',{credentials:'same-origin',headers:{Accept:'application/json'}}), session = await sessionResponse.json();
-        if (sessionResponse.ok && sessionId === state.sessionId && (!session.user || !['admin','operator'].includes(session.user.role) || session.user.id !== state.user?.id)) showLogin('Quyền truy cập hoặc phiên đăng nhập đã thay đổi. Vui lòng đăng nhập lại.');
+        if (sessionResponse.ok && sessionId === state.sessionId && (!session.user || !['admin','operator'].includes(session.user.role) || session.user.id !== state.user?.id || session.user.role !== state.user.role || (session.user.operatorId ?? null) !== (state.user.operatorId ?? null))) showLogin('Quyền truy cập hoặc phiên đăng nhập đã thay đổi. Vui lòng đăng nhập lại.');
       } catch { /* Giữ phiên hiện tại nếu không xác minh được kết nối. */ }
     }
-    throw new Error(typeof data.error === 'string' ? data.error : data.error?.message || data.message || 'Không thể thực hiện yêu cầu.');
+    const error = new Error(typeof data.error === 'string' ? data.error : data.error?.message || data.message || 'Không thể thực hiện yêu cầu.');
+    error.status = response.status; error.code = data.error?.code || data.code; error.ambiguous = response.status >= 500; throw error;
   }
   return data;
 }
@@ -71,6 +75,7 @@ function toast(message, isError = false) {
   setTimeout(() => element.remove(), 5500);
 }
 function showLogin(message = '') {
+  clearRescheduleAttempt();
   state.sessionId++;
   state.loadId++;
   document.dispatchEvent(new CustomEvent('ticket4t:session-cleared'));
@@ -97,6 +102,37 @@ function paymentLabel(status) {
 }
 function canReschedule(booking) {
   return ['reserved','confirmed'].includes(booking.status) && ['pending','paid'].includes(booking.paymentStatus) && new Date(`${booking.trip?.date}T${booking.trip?.departureTime}:00+07:00`).getTime() > Date.now()+2*3600000;
+}
+function clearRescheduleAttempt() {
+  rescheduleAttempt = null;
+  try { sessionStorage.removeItem(rescheduleAttemptKey); } catch { /* Không giữ dữ liệu hành khách trong bộ nhớ sau khi hết phiên. */ }
+  renderReschedulePending();
+}
+function restoreRescheduleAttempt(user) {
+  try { rescheduleAttempt = rescheduleRecovery.read(sessionStorage.getItem(rescheduleAttemptKey),user); } catch { rescheduleAttempt = null; }
+  if (!rescheduleAttempt) { try { sessionStorage.removeItem(rescheduleAttemptKey); } catch {} }
+  renderReschedulePending();
+}
+function saveRescheduleAttempt(attempt) {
+  sessionStorage.setItem(rescheduleAttemptKey,JSON.stringify(attempt));
+  rescheduleAttempt = attempt;
+  renderReschedulePending();
+}
+function renderReschedulePending() {
+  const banner = $('#admin-reschedule-pending');
+  if (!banner) return;
+  banner.hidden = !state.user || !rescheduleAttempt;
+  banner.innerHTML = !state.user || !rescheduleAttempt ? '' : `<div><strong>Cần kiểm tra kết quả đổi chuyến · ${escapeHTML(rescheduleAttempt.booking.code)}</strong>Yêu cầu trước chưa nhận được kết quả chắc chắn. Mở lại để xác nhận đúng lựa chọn đã gửi.</div><button class="button secondary" type="button" data-action="resume-reschedule-request">Kiểm tra yêu cầu đổi chuyến</button>`;
+}
+async function verifyStaffIdentity(sessionId) {
+  const user = state.user;
+  if (!user || sessionId !== state.sessionId) return false;
+  const session = await api('/auth/me');
+  if (sessionId !== state.sessionId || state.user !== user) return false;
+  if (!session.user || session.user.id !== user.id || session.user.role !== user.role || (session.user.operatorId ?? null) !== (user.operatorId ?? null)) {
+    showLogin('Tài khoản hoặc quyền vận hành đã thay đổi. Vui lòng đăng nhập lại.'); return false;
+  }
+  return true;
 }
 function localDateTime(value) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(value)).map(part => [part.type,part.value]));
@@ -164,6 +200,7 @@ async function enterPortal(user) {
   if (!['admin','operator'].includes(user?.role)) return showLogin('Tài khoản này chưa có quyền truy cập cổng vận hành.');
   const sessionId = ++state.sessionId;
   state.user = user;
+  restoreRescheduleAttempt(user);
   $('#login-screen').hidden = true;
   $('#portal').hidden = false;
   $('#profile-name').textContent = user.fullName || user.email;
@@ -186,6 +223,7 @@ async function navigate(page, preserveFilters = false) {
   if (!state.user || !pages[page]) return;
   if (['operators','users','promotions','integrations'].includes(page) && state.user.role !== 'admin') page = 'dashboard';
   const previousPage = state.page;
+  if (page !== previousPage && state.editor?.kind === 'reschedule') { closeEditor(true); state.editor = null; }
   const oldFilters = preserveFilters ? (previousPage === page && $('#filters') ? Object.fromEntries(new FormData($('#filters'))) : state.filters[page] || {}) : {};
   try { if (['dashboard','audit','bookings'].includes(page)) validateRange(oldFilters); if (page === 'trips') validateTripFilters(oldFilters); } catch (error) { return toast(error.message,true); }
   state.filters[page] = oldFilters;
@@ -217,6 +255,7 @@ async function navigate(page, preserveFilters = false) {
     if (id === state.loadId && state.user) $('#content').innerHTML = `<div class="panel">${empty('Không thể tải dữ liệu',error.message)}<div class="dialog-footer"><button class="button primary" data-action="refresh">Thử lại</button></div></div>`;
   }
   decorateIcons($('#portal'));
+  renderReschedulePending();
 }
 async function renderDashboard(id,filters = {}) {
   const rangeQuery = new URLSearchParams();
@@ -433,22 +472,50 @@ function openCashReceipt(booking) {
   $('#editor-dialog').showModal();
 }
 async function openReschedule(booking) {
-  beginEditor({kind:'reschedule',id:booking.code,booking,target:null,seats:[]});
+  if (rescheduleAttempt) return openRescheduleRecovery();
+  beginEditor({kind:'reschedule',id:booking.code,booking:structuredClone(booking),target:null,seats:[]});
   $('#editor-title').textContent = `Đổi chuyến · ${booking.code}`;
   $('#editor-kicker').textContent = 'ĐỔI LỊCH TRONG CÙNG NHÀ XE';
   $('#editor-error').textContent = '';
-  $('#editor-fields').innerHTML = `<div class="notice teal span-2"><div><strong>${escapeHTML(booking.fullName)} · ${escapeHTML((booking.seats || []).join(', '))}</strong>${escapeHTML(booking.trip?.fromName)} → ${escapeHTML(booking.trip?.toName)} · ${escapeHTML(formatDate(booking.trip?.date))} ${escapeHTML(booking.trip?.departureTime)}<br>Chọn đúng ${number(booking.seats?.length || 0)} chỗ trên chuyến cùng tuyến và nhà xe, cùng giá trị vé. Cả hai chuyến cần còn ít nhất 2 giờ trước khi khởi hành. Ưu đãi của đơn được giữ khi đủ điều kiện.</div></div>${field('targetDate','Ngày đi mới',booking.trip?.date || tomorrow(),'required','date')}<div class="reschedule-search"><button class="button secondary" type="button" data-action="find-reschedule-trips">Tìm chuyến phù hợp</button></div><label class="span-2">Chuyến mới<select name="tripId" required disabled><option value="">Đang tải chuyến phù hợp…</option></select></label><div id="reschedule-target" class="span-2"></div>`;
+  $('#editor-fields').innerHTML = `${rescheduleOriginHTML(booking)}${field('targetDate','Ngày đi mới',booking.trip?.date || tomorrow(),'required','date')}<div class="reschedule-search"><button class="button secondary" type="button" data-action="find-reschedule-trips">Tìm chuyến phù hợp</button></div><label class="span-2">Chuyến mới<select name="tripId" required disabled><option value="">Đang tải chuyến phù hợp…</option></select></label><div id="reschedule-target" class="span-2"></div><label class="check-label reschedule-confirmation span-2"><input type="checkbox" name="rescheduleConfirmed" required>Tôi đã kiểm tra vé gốc, chuyến mới, ghế và điểm đón trả, đồng ý đổi chuyến.</label>`;
   $('#editor-form [type="submit"]').textContent = 'Xác nhận đổi chuyến';
   $('#editor-form [type="submit"]').disabled = true;
   decorateIcons($('#editor-dialog'));
   $('#editor-dialog').showModal();
   await findRescheduleTrips();
 }
+function rescheduleOriginHTML(booking) {
+  return `<div id="admin-reschedule-origin" class="notice teal span-2"><div><strong>${escapeHTML(booking.code)} · ${escapeHTML(booking.fullName)} · Ghế ${(booking.seats || []).map(escapeHTML).join(', ')}</strong>${escapeHTML(booking.trip?.fromName || booking.trip?.from)} → ${escapeHTML(booking.trip?.toName || booking.trip?.to)} · ${escapeHTML(formatDate(booking.trip?.date))} ${escapeHTML(booking.trip?.departureTime)}<br>Trạng thái: ${statusBadge(booking.status)} · ${paymentLabel(booking.paymentStatus)} · ${money(booking.total)}<br>Chọn đúng ${number(booking.seats?.length || 0)} chỗ trên chuyến cùng tuyến và nhà xe, cùng giá trị vé. Cả hai chuyến cần còn ít nhất 2 giờ trước khi khởi hành. Ưu đãi của đơn được giữ khi đủ điều kiện.</div></div>`;
+}
+function markRescheduleReview(current,message) {
+  if (state.editor !== current) return;
+  $('#admin-reschedule-review-notice')?.remove();
+  $('#editor-fields').insertAdjacentHTML('afterbegin',`<div id="admin-reschedule-review-notice" class="notice span-2" role="alert"><div><strong>Cần kiểm tra lại trước khi đổi chuyến</strong>${escapeHTML(message)}</div></div>`);
+  if ($('#editor-form').elements.rescheduleConfirmed) $('#editor-form').elements.rescheduleConfirmed.checked = false;
+}
+function openRescheduleRecovery() {
+  if (!rescheduleAttempt || !state.user || state.editor?.busy) return;
+  const attempt = rescheduleAttempt;
+  if (!rescheduleRecovery.read(JSON.stringify(attempt),state.user)) { clearRescheduleAttempt(); return toast('Yêu cầu lưu đã hết thời hạn hoặc không còn thuộc tài khoản này. Tra cứu vé để kiểm tra kết quả.',true); }
+  const wasOpen = $('#editor-dialog').open;
+  beginEditor({kind:'reschedule',id:attempt.booking.code,booking:structuredClone(attempt.booking),target:structuredClone(attempt.target),seats:[...attempt.body.seats],attempt});
+  $('#editor-title').textContent = `Kiểm tra đổi chuyến · ${attempt.booking.code}`;
+  $('#editor-kicker').textContent = 'XÁC NHẬN LẠI YÊU CẦU ĐÃ GỬI';
+  $('#editor-error').textContent = '';
+  const target = attempt.target, body = attempt.body;
+  const point = (name,value) => `<label>${name === 'pickup' ? 'Điểm đón mới' : 'Điểm trả mới'}<select name="${name}" disabled><option value="${escapeHTML(value)}">${escapeHTML(value)}</option></select></label>`;
+  $('#editor-fields').innerHTML = `<div id="admin-reschedule-recovery-notice" class="notice span-2" role="alert"><div><strong>Chưa biết chắc kết quả yêu cầu trước</strong>Xác nhận lại đúng lựa chọn đã gửi để kiểm tra kết quả. Máy chủ trả về trạng thái hiện tại của vé, kể cả khi vé đã hủy hoặc đã đổi tiếp. Các lựa chọn được giữ nguyên cho đến khi có kết quả chắc chắn.</div></div>${rescheduleOriginHTML(attempt.booking)}<div class="span-2 reschedule-recovery-details"><strong>Chuyến mới đã yêu cầu · ${escapeHTML(target.id)}</strong><p>${escapeHTML(target.fromName || target.from)} → ${escapeHTML(target.toName || target.to)} · ${escapeHTML(formatDate(target.date))} ${escapeHTML(target.departureTime)}</p><p>Ghế: ${body.seats.map(escapeHTML).join(', ')} · Giá trị vé gốc trước ưu đãi ${money(attempt.booking.subtotal)}</p><button class="button secondary" type="button" data-action="restore-reschedule-request">Khôi phục đúng lựa chọn đã gửi</button></div><label class="span-2">Chuyến đã gửi<select name="tripId" disabled><option value="${escapeHTML(target.id)}">${escapeHTML(target.id)}</option></select></label><div class="reschedule-points span-2">${point('pickup',body.pickup)}${point('dropoff',body.dropoff)}</div><label class="check-label reschedule-confirmation span-2"><input type="checkbox" name="rescheduleConfirmed" required>Tôi đã kiểm tra và xác nhận lại đúng lựa chọn đã gửi để nhận kết quả hiện tại của vé.</label>`;
+  $('#editor-form [type="submit"]').textContent = 'Kiểm tra kết quả đổi chuyến';
+  $('#editor-form [type="submit"]').disabled = false;
+  decorateIcons($('#editor-dialog'));
+  if (!wasOpen) $('#editor-dialog').showModal();
+}
 async function findRescheduleTrips() {
-  if (state.editor?.kind !== 'reschedule') return;
+  if (state.editor?.kind !== 'reschedule' || state.editor.attempt || state.editor.busy) return;
   const current = state.editor, booking = current.booking, form = $('#editor-form');
   const searchId = (current.searchId || 0)+1; current.searchId = searchId;
   current.target = null; current.seats = [];
+  form.elements.rescheduleConfirmed.checked = false;
   $('#reschedule-target').innerHTML = '';
   form.querySelector('[type="submit"]').disabled = true;
   form.elements.tripId.disabled = true;
@@ -466,11 +533,12 @@ async function findRescheduleTrips() {
     if (!current.candidates.length) $('#reschedule-target').innerHTML = '<div class="notice"><div>Không có chuyến đáp ứng tuyến, nhà xe, nguồn dữ liệu và thời gian trong ngày đã chọn. Thử ngày khác.</div></div>';
   } catch (error) { if (state.editor === current && current.searchId === searchId) $('#editor-error').textContent = error.message; }
 }
-async function loadRescheduleTarget(id) {
-  if (state.editor?.kind !== 'reschedule') return;
+async function loadRescheduleTarget(id,choices = null) {
+  if (state.editor?.kind !== 'reschedule' || state.editor.attempt) return;
   const current = state.editor;
   const targetRequest = (current.targetRequest || 0)+1; current.targetRequest = targetRequest;
   current.target = null; current.seats = [];
+  $('#editor-form').elements.rescheduleConfirmed.checked = false;
   if (!id) { $('#reschedule-target').innerHTML = ''; $('#editor-form [type="submit"]').disabled = true; return; }
   $('#reschedule-target').innerHTML = loading();
   $('#editor-form [type="submit"]').disabled = true;
@@ -479,21 +547,81 @@ async function loadRescheduleTarget(id) {
     const trip = await api(`/trips/${encodeURIComponent(id)}`);
     if (state.editor !== current || current.targetRequest !== targetRequest || $('#editor-form').elements.tripId.value !== id) return;
     current.target = trip;
+    if (choices) current.seats = choices.seats.filter(label => trip.seats.some(seat => seat.label === label && seat.status === 'available')).slice(0,current.booking.seats.length);
     const points = (name,items,selected) => `<label>${name === 'pickup' ? 'Điểm đón mới' : 'Điểm trả mới'}<select name="${name}" required>${(items || []).map(item => `<option value="${escapeHTML(item)}"${item === selected ? ' selected' : ''}>${escapeHTML(item)}</option>`).join('')}</select></label>`;
-    $('#reschedule-target').innerHTML = `<div class="reschedule-points">${points('pickup',trip.pickupPoints,current.booking.pickup)}${points('dropoff',trip.dropoffPoints,current.booking.dropoff)}</div><div class="reschedule-seat-heading"><strong>Chọn ${number(current.booking.seats.length)} chỗ mới</strong><span>Trống · <i></i> Đã có khách</span></div><div class="reschedule-seats">${(trip.seats || []).map(seat => `<button class="reschedule-seat${seat.status !== 'available' ? ' unavailable' : ''}" type="button" data-action="toggle-reschedule-seat" data-seat="${escapeHTML(seat.label)}"${seat.status !== 'available' ? ' disabled' : ''} aria-pressed="false"><strong>${escapeHTML(seat.label)}</strong><small>${money(seat.price || trip.price)}</small></button>`).join('')}</div><div id="reschedule-summary" class="reschedule-summary"></div>`;
+    $('#reschedule-target').innerHTML = `<p><strong>${escapeHTML(formatDate(trip.date))} · ${escapeHTML(trip.departureTime)} · ${escapeHTML(trip.operatorName || operatorName(trip.operatorId))}</strong></p><div class="reschedule-points">${points('pickup',trip.pickupPoints,choices?.pickup || current.booking.pickup)}${points('dropoff',trip.dropoffPoints,choices?.dropoff || current.booking.dropoff)}</div><div class="reschedule-seat-heading"><strong>Chọn ${number(current.booking.seats.length)} chỗ mới</strong><span>Trống · <i></i> Đã có khách</span></div><div class="reschedule-seats">${(trip.seats || []).map(seat => `<button class="reschedule-seat${seat.status !== 'available' ? ' unavailable' : ''}" type="button" data-action="toggle-reschedule-seat" data-seat="${escapeHTML(seat.label)}"${seat.status !== 'available' ? ' disabled' : ''} aria-pressed="false"><strong>${escapeHTML(seat.label)}</strong><small>${money(seat.price || trip.price)}</small></button>`).join('')}</div><div id="reschedule-summary" class="reschedule-summary"></div>`;
     updateRescheduleSummary();
   } catch (error) { if (state.editor === current && current.targetRequest === targetRequest) $('#reschedule-target').innerHTML = empty('Không thể tải ghế',error.message); }
 }
 function updateRescheduleSummary() {
   if (state.editor?.kind !== 'reschedule' || !state.editor.target) return;
+  if (state.editor.attempt) { $('#editor-form [type="submit"]').disabled = Boolean(state.editor.busy); return; }
   const {booking,target,seats} = state.editor;
   const subtotal = seats.reduce((sum,label) => sum + Number(target.seats.find(seat => seat.label === label)?.price || target.price),0);
   const originalSubtotal = Number(booking.subtotal ?? booking.total);
   const complete = seats.length === booking.seats.length;
   const matching = subtotal === originalSubtotal;
   $('#reschedule-summary').innerHTML = `<strong>${number(seats.length)} / ${number(booking.seats.length)} chỗ đã chọn · ${money(subtotal)}</strong><p>Giá trị vé gốc trước ưu đãi: ${money(originalSubtotal)}. ${complete && !matching ? 'Chọn ghế có tổng giá bằng giá trị vé gốc để đổi chuyến.' : 'Ghế được kiểm tra lại khi xác nhận đổi chuyến.'}</p>`;
-  $('#editor-form [type="submit"]').disabled = !complete || !matching;
+  $('#editor-form [type="submit"]').disabled = !complete || !matching || !canReschedule(booking) || Boolean(state.editor.busy);
   $$('.reschedule-seat').forEach(button => { const selected = seats.includes(button.dataset.seat); button.classList.toggle('selected',selected); button.setAttribute('aria-pressed',String(selected)); });
+}
+async function submitAdminReschedule(current,form) {
+  const sessionId = state.sessionId, loadId = state.loadId, route = location.hash, ownerId = state.user?.id;
+  const active = () => state.editor === current && sessionId === state.sessionId && loadId === state.loadId && location.hash === route && state.user?.id === ownerId && $('#editor-dialog').open;
+  if (!form.elements.rescheduleConfirmed?.checked) { $('#editor-error').textContent = 'Cần kiểm tra và xác nhận lại lựa chọn trước khi đổi chuyến.'; return; }
+  const choices = {code:current.id,tripId:form.elements.tripId.value,seats:[...current.seats],pickup:form.elements.pickup?.value,dropoff:form.elements.dropoff?.value};
+  if (current.attempt && !rescheduleRecovery.matches(current.attempt,choices)) { $('#editor-error').textContent = 'Lựa chọn đã thay đổi. Khôi phục đúng lựa chọn đã gửi và xác nhận lại để kiểm tra kết quả.'; form.elements.rescheduleConfirmed.checked = false; return; }
+  if (rescheduleAttempt && current.attempt !== rescheduleAttempt) { $('#editor-error').textContent = 'Hãy kiểm tra kết quả yêu cầu trước trước khi tạo yêu cầu đổi chuyến mới.'; return; }
+  setEditorBusy(current,true); $('#editor-error').textContent = '';
+  let attempt = current.attempt, posted = false;
+  try {
+    if (!await verifyStaffIdentity(sessionId) || !active()) return;
+    if (!attempt) {
+      if (!current.target || !canReschedule(current.booking) || current.seats.length !== current.booking.seats.length) throw new Error('Vé không còn đủ điều kiện hoặc chưa chọn đủ ghế để đổi chuyến.');
+      attempt = rescheduleRecovery.create({ownerId,ownerRole:state.user.role,ownerOperatorId:state.user.operatorId ?? null,booking:current.booking,target:current.target,seats:choices.seats,pickup:choices.pickup,dropoff:choices.dropoff,key:crypto.randomUUID()});
+      saveRescheduleAttempt(attempt);
+    } else if (!rescheduleRecovery.read(JSON.stringify(attempt),state.user)) {
+      clearRescheduleAttempt(); throw new Error('Yêu cầu đã hết thời hạn. Tra cứu lại vé để kiểm tra kết quả trước khi chọn chuyến mới.');
+    }
+    posted = true;
+    const result = await api(attempt.path,{method:'POST',headers:{'Idempotency-Key':attempt.key},body:JSON.stringify(attempt.body)});
+    if (!active()) return;
+    if (!result.booking || result.booking.code !== attempt.booking.code) { const error = new Error('Chưa nhận được kết quả vé hợp lệ.'); error.ambiguous = true; throw error; }
+    if (!await verifyStaffIdentity(sessionId) || !active()) return;
+    if (rescheduleAttempt === attempt) clearRescheduleAttempt();
+    closeEditor(true); state.editor = null;
+    toast(result.replayed ? 'Đã nhận kết quả hiện tại của vé. Yêu cầu trước không bị thực hiện lại.' : 'Đã đổi chuyến và chuyển ghế của đơn vé.');
+    const navigation = navigate('bookings',true), completionLoadId = state.loadId;
+    await navigation;
+    if (sessionId === state.sessionId && completionLoadId === state.loadId && state.user?.id === ownerId && state.page === 'bookings' && location.hash === '#bookings' && !state.editor) openBookingDetail(result.booking);
+  } catch (error) {
+    if (!active()) return;
+    if (posted && (error.ambiguous || !error.status || error.status >= 500)) {
+      current.busy = false; openRescheduleRecovery(); $('#editor-error').textContent = `${error.message} Chưa biết chắc kết quả; xác nhận lại đúng yêu cầu đã gửi để kiểm tra.`;
+    } else if (posted) {
+      if (rescheduleAttempt === attempt) clearRescheduleAttempt();
+      if (error.status === 401 || error.status === 403) {
+        closeEditor(true); state.editor = null; $('#editor-fields').innerHTML = ''; state.bookings = [];
+        toast(error.message,true); await navigate('bookings',true); return;
+      }
+      try {
+        const data = await api(`/admin/bookings?${new URLSearchParams({code:current.id,limit:'1'})}`);
+        if (!active()) return;
+        const booking = (data.bookings || []).find(item => item.code === current.id);
+        if (!booking) { closeEditor(true); state.editor = null; $('#editor-fields').innerHTML = ''; state.bookings = []; toast('Vé không còn trong phạm vi tài khoản. Hãy kiểm tra lại danh sách vé.',true); await navigate('bookings',true); return; }
+        current.busy = false;
+        const refresh = openReschedule(booking), refreshed = state.editor;
+        await refresh;
+        if (sessionId !== state.sessionId || loadId !== state.loadId || location.hash !== route || state.editor !== refreshed || refreshed?.kind !== 'reschedule' || refreshed.id !== current.id) return;
+        if (refreshed.candidates?.some(trip => trip.id === choices.tripId)) { form.elements.tripId.value = choices.tripId; await loadRescheduleTarget(choices.tripId,choices); }
+        if (state.editor !== refreshed) return;
+        markRescheduleReview(refreshed,error.code === 'BOOKING_CHANGED' ? 'Vé gốc đã thay đổi. Thông tin hiện tại đã được tải lại; kiểm tra trạng thái, ghế gốc và chuyến mới rồi xác nhận lại.' : error.code === 'TRIP_CHANGED' ? 'Lịch chạy, giá hoặc điểm đón trả của chuyến mới đã thay đổi. Thông tin đã được tải lại; kiểm tra các lựa chọn rồi xác nhận lại.' : `${error.message} Dữ liệu vé và chuyến đã được tải lại. Kiểm tra lựa chọn rồi xác nhận lại.`);
+        $('#editor-error').textContent = error.message;
+      } catch (refreshError) {
+        if (active()) { current.attempt = null; current.target = null; current.seats = []; $('#reschedule-target')?.replaceChildren(); form.elements.rescheduleConfirmed.checked = false; $('#editor-error').textContent = `${error.message} Không thể tải lại dữ liệu: ${refreshError.message} Đóng cửa sổ và tra cứu lại vé trước khi thử tiếp.`; }
+      }
+    } else { $('#editor-error').textContent = error.message; }
+  } finally { if (state.editor === current) setEditorBusy(current,false); }
 }
 function openRefundReceipt(booking) {
   beginEditor({kind:'refund-receipt',id:booking.code,booking});
@@ -662,7 +790,7 @@ document.addEventListener('keydown',event => {
 document.addEventListener('click',event => {
   if ($('#sidebar').classList.contains('open') && !event.target.closest('#sidebar') && !event.target.closest('#menu-button')) { $('#sidebar').classList.remove('open'); $('#menu-button').setAttribute('aria-expanded','false'); }
 });
-$$('[data-close-dialog]').forEach(button => button.addEventListener('click',closeEditor));
+$$('[data-close-dialog]').forEach(button => button.addEventListener('click',() => closeEditor()));
 $('#editor-dialog').addEventListener('cancel',event => { if (state.editor?.busy) event.preventDefault(); });
 $('#editor-dialog').addEventListener('close',() => {
   if ($('#editor-dialog').open) return;
@@ -730,12 +858,15 @@ document.addEventListener('click', async event => {
   if (action === 'cash-receipt' && booking) return openCashReceipt(booking);
   if (action === 'refund-receipt' && booking) return openRefundReceipt(booking);
   if (action === 'reschedule-booking' && booking) return openReschedule(booking);
+  if (action === 'resume-reschedule-request' || action === 'restore-reschedule-request') return openRescheduleRecovery();
   if (action === 'find-reschedule-trips') return findRescheduleTrips();
   if (action === 'toggle-reschedule-seat' && state.editor?.kind === 'reschedule') {
+    if (state.editor.attempt || state.editor.busy) return;
     const label = button.dataset.seat, current = state.editor;
     if (current.seats.includes(label)) current.seats = current.seats.filter(seat => seat !== label);
     else if (current.seats.length >= current.booking.seats.length) return toast(`Chỉ chọn ${current.booking.seats.length} chỗ để đổi chuyến.`,true);
     else current.seats.push(label);
+    $('#editor-form').elements.rescheduleConfirmed.checked = false;
     return updateRescheduleSummary();
   }
   if (action === 'delete-trip' && trip) return confirmAction('Ngừng mở bán chuyến xe?',`Chuyến ${trip.fromName || trip.from} → ${trip.toName || trip.to}, ${formatDate(trip.date)} lúc ${trip.departureTime}. Chuyến này sẽ ngừng nhận đặt vé mới. Vé hiện có được giữ nguyên; cần liên hệ khách nếu lịch chạy thay đổi.`,async () => { await api(`/admin/trips/${encodeURIComponent(id)}`,{method:'DELETE',body:{}}); toast('Chuyến xe đã ngừng mở bán.'); await navigate('trips',true); },'Ngừng mở bán');
@@ -774,6 +905,7 @@ document.addEventListener('submit',async event => {
   }
 });
 document.addEventListener('change', async event => {
+  if (['pickup','dropoff'].includes(event.target.name) && state.editor?.kind === 'reschedule') $('#editor-form').elements.rescheduleConfirmed.checked = false;
   if (event.target.name === 'targetDate' && state.editor?.kind === 'reschedule') await findRescheduleTrips();
   if (event.target.name === 'tripId' && state.editor?.kind === 'reschedule') await loadRescheduleTarget(event.target.value);
   if (event.target.name === 'type' && state.editor?.kind === 'promotion') updatePromotionType();
@@ -793,17 +925,12 @@ $('#editor-form').addEventListener('submit', async event => {
   event.preventDefault();
   const current = state.editor;
   if (!current || current.kind === 'readonly' || current.busy || !event.target.reportValidity()) return;
+  if (current.kind === 'reschedule') return submitAdminReschedule(current,event.target);
   const {kind,id} = current, sessionId = state.sessionId, form = event.target, data = Object.fromEntries(new FormData(form));
   setEditorBusy(current,true); $('#editor-error').textContent = '';
   let path, method = id ? 'PATCH' : 'POST', targetPage, success;
   try {
-    if (kind === 'reschedule') {
-      if (!current.target || current.seats.length !== current.booking.seats.length) throw new Error('Chọn chuyến và đủ số ghế mới trước khi đổi.');
-      path = `/admin/bookings/${encodeURIComponent(id)}/reschedule`; method = 'POST';
-      Object.keys(data).forEach(key => delete data[key]);
-      Object.assign(data,{tripId:current.target.id,seats:[...current.seats],pickup:form.elements.pickup.value,dropoff:form.elements.dropoff.value});
-      targetPage = 'bookings'; success = 'Đã đổi chuyến và chuyển ghế của đơn vé.';
-    } else if (kind === 'promotion') {
+    if (kind === 'promotion') {
       ['value','minSpend','maxDiscount','maxUses','perCustomer'].forEach(field => data[field] = Number(data[field]));
       data.code = data.code.trim().toUpperCase(); data.title = data.title.trim();
       if (!/^[A-Z0-9_-]{3,32}$/.test(data.code)) throw new Error('Mã ưu đãi cần từ 3–32 chữ, số, dấu gạch ngang hoặc gạch dưới.');

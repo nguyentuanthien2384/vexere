@@ -36,6 +36,8 @@ Quản trị tạo ưu đãi cố định/phần trăm, mức đơn tối thiể
 
 Đổi vé hiện hỗ trợ cùng nhà xe, tuyến, nguồn và giá gốc, số hành khách giữ nguyên, trước giờ đi ít nhất hai giờ. Chiết khấu của vé được giữ lại, ghế cũ/mới cập nhật trong giao dịch và có nhật ký. Khi cần thay giá, liên hệ nhà xe xử lý đối soát; hệ thống từ chối tự đổi với chênh lệch chưa được xác nhận.
 
+Tại cổng vận hành, chọn vé, chuyến mới, ghế và điểm đón/trả rồi kiểm tra thông tin trước khi xác nhận. Khi kết quả chưa rõ do mất kết nối, dùng thông báo “Cần kiểm tra kết quả đổi chuyến” để mở lại đúng yêu cầu; tải lại trang trong cùng tài khoản vẫn có thể khôi phục trong 24 giờ. Kiểm tra lại giữ nguyên lựa chọn và không tạo lần đổi thứ hai. Nếu vé gốc hoặc chuyến mới đã thay đổi trước khi lưu, xem thông tin/trạng thái mới và đồng ý lại. Kết quả gửi lại có thể là vé đã hủy hoặc đã đổi tiếp; đối soát theo trạng thái hiện tại. Đăng xuất, mất quyền hoặc đổi tài khoản/phạm vi sẽ bỏ dữ liệu khôi phục trong trình duyệt; khi đó tra cứu vé và nhật ký hiện tại để xử lý tiếp.
+
 Nhà xe mở Danh sách ở chuyến để xem/in hành khách và điểm đón/trả. Số chỗ có thể gồm vé chờ thanh toán; cần kiểm tra trạng thái trước khi cho khách lên xe.
 
 ## Email

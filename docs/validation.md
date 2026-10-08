@@ -1,5 +1,19 @@
 # Kết quả kiểm tra bản 3 — 07/10/2026
 
+## Xác nhận và khôi phục đổi chuyến tại cổng vận hành — 08/10/2026
+
+- Admin/nhà xe gửi `expectedSourceVersion`, `expectedBookingVersion` và `Idempotency-Key`. Khi mất phản hồi, giữ nguyên body/path/key cùng thông tin vé gốc/chuyến mới; thông báo toàn cổng cho phép mở lại sau reload trong cùng tài khoản. Yêu cầu khôi phục cần xác nhận thủ công, khóa lựa chọn ban đầu và không tạo thêm lần đổi. Replay hiển thị trạng thái hiện tại kể cả vé đã hủy, hoàn tiền hoặc đổi tiếp.
+- Vé gốc hoặc điều kiện chuyến mới thay đổi yêu cầu tải lại và kiểm tra trạng thái, ghế, giá, lịch, điểm đón/trả rồi đồng ý mới. Hai lỗi phản hồi muộn đã được sửa và có ca hồi quy: tải lại sau lỗi không ghi đè editor mới của cùng mã vé; tải danh sách sau thành công không mở lại chi tiết cũ khi người dùng đã điều hướng đi rồi quay lại.
+- Helper thuần lưu snapshot bất biến, kiểm tra thời hạn 24 giờ, cấu trúc/body/path/key, ngày giờ thật, nhãn ghế/điểm/giá và danh tính gồm tài khoản/quyền/phạm vi nhà xe. Vé tiền mặt có `expiresAt:null` khôi phục được; cache sai bị loại. Không lưu điện thoại/email khách trong snapshot helper. Đăng xuất, hết phiên hoặc đổi danh tính/phạm vi xóa dữ liệu khôi phục; kiểm tra phiên trước/sau gửi và chặn phản hồi cũ tác động editor hoặc tài khoản mới.
+- Thêm **10 unit + 7 API + 14 tình huống browser**. `npm run test:ci` đạt **292/292** (113 unit, 179 integration/component/subprocess), không skip/todo; **87** file JS hợp lệ, **39** tình huống catalogue và 4 nhóm kết nối ngoài chưa chạy. API nhân viên kiểm tra thu tiền/xác nhận/hủy trong lúc yêu cầu chờ, phiên bản nguồn/đích, key riêng từng tài khoản, giữ chứng từ và replay trạng thái hiện tại.
+- Coverage backend SQLite đạt **97,31% dòng, 89,02% nhánh, 95,68% hàm**, vượt gate 95/85/90. Số này không đo JavaScript browser, kể cả helper frontend có unit test, hoặc dịch vụ đối tác.
+- PostgreSQL **18.4** thực đạt **101/101** (19 backend, 20 nâng cao, 10 admin, 10 search, 16 hold-recovery, 16 reschedule-recovery, 7 admin-reschedule-contracts, 3 database/session). Mỗi file dùng schema riêng, các ca mới còn tách schema từng ca. Schema/cluster tạm riêng đã được dọn; không thay cluster của người dùng.
+- `npm run test:ui:all` đạt **10/10** bộ Chrome trên mã cuối; bộ nhân viên đạt **14/14** ca, gồm nguyên body/key sau mất phản hồi và reload, chống gửi trùng, đồng ý mới sau thay đổi, mobile 390px, cache lỗi/ngày không tồn tại/key quá dài, thu hồi quyền, đổi tài khoản, replay vé hủy/đổi tiếp và hai race lồng nhau. Bộ mới không có lỗi JavaScript/CSP.
+
+Hợp đồng tại [API](api.md), vận hành tại [hướng dẫn](operations.md), cách chạy tại [kiểm thử](testing.md), truy vết tại [danh mục ca](test-cases.json). Toàn bộ kiểm thử dùng kho tạm/loopback; không đổi `.env` hoặc database đang bán vé. Merchant/SMTP/API nhà xe thực, CI GitHub, PostgreSQL16/Docker và tải vận hành lớn chưa được xác minh trong đợt này. Các kiểm thử gate/fault injection không chứng nhận tải nhiều tiến trình thực.
+
+Fixture của một lượt browser bị ngắt còn tại `C:\Users\Admin\AppData\Local\Temp\ticket4t-browser-admin-reschedule-nhXonL`: phê duyệt tự động từ chối thao tác xóa đệ quy với lý do `blocked by policy`. Không thử cách xóa khác; thư mục chỉ chứa dữ liệu kiểm thử. Các lượt hoàn tất sau đó và lượt mười bộ cuối đã dọn fixture riêng thành công.
+
 ## Đổi chuyến có phiên bản gốc và phục hồi an toàn — 08/10/2026
 
 - API đổi chuyến khách/nhân viên hỗ trợ `Idempotency-Key`: cùng body/path/key chỉ chuyển ghế, tiêu thụ giữ chỗ và ghi lịch sử/audit một lần. Replay trả vé hiện tại sau khi giữ chỗ cũ đã tiêu thụ, chuyến đích ngừng bán, vé bị hủy hoặc đổi tiếp. Vẫn kiểm tra chủ vé, phiên và phạm vi nhân viên hiện tại. Lỗi trước commit rollback cả khóa yêu cầu.

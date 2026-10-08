@@ -59,6 +59,7 @@ Không cần sửa file `.env` cũ để xem bản kiểm thử. Nếu muốn c�
 - Tạo/quản lý tài khoản khách và nhân viên nhà xe; quyền nhà xe chỉ truy cập dữ liệu thuộc nhà xe được giao. Thu hồi phiên khi đổi quyền hoặc khóa tài khoản; lịch sử vé và doanh thu giữ nhà xe đã bán sau khi chuyển chủ chuyến. Tài khoản quản trị cấp bằng cấu hình máy chủ.
 - Quản lý mã ưu đãi, điều kiện áp dụng, thời hạn và số lượt sử dụng.
 - Xem/in danh sách hành khách theo chuyến, ghế, điểm đón/trả và trạng thái thu tiền.
+- Đổi chuyến tại cổng vận hành gửi phiên bản vé gốc/chuyến mới và khóa chống thực hiện trùng; yêu cầu chưa rõ kết quả có thể kiểm tra lại sau tải lại trang với đúng thông tin ban đầu.
 
 ### Thanh toán
 
@@ -104,6 +105,7 @@ npm run test:ui:all
 npm run test:ui:search
 npm run test:ui:checkout
 npm run test:ui:reschedule
+npm run test:ui:admin-reschedule
 npm run pack:project
 ```
 
@@ -111,7 +113,7 @@ ZIP nằm ở `artifacts/Ticket4T-project.zip`, chứa mã nguồn, tài nguyên
 
 `test:ui` mở Chrome headless, chạy trên database tạm riêng và kiểm tra tìm chuyến → chọn ghế → đặt/tra cứu/hủy vé cùng các trang quản trị. Cần cài Chrome; với trình duyệt Playwright riêng, cài `npx playwright install chromium` và đặt `BROWSER_CHANNEL=chromium`. Ảnh kiểm thử được lưu vào `artifacts/screenshots/`.
 
-Đã tách unit test khỏi API/database test. `test:ci` kiểm tra cú pháp, danh mục ca và toàn bộ backend với ngưỡng coverage 95% dòng, 85% nhánh, 90% hàm; xuất JUnit/JSON/LCOV vào `artifacts/tests/coverage/`. CI GitHub có job Node24 Ubuntu/Windows, PostgreSQL16 và Chromium. Xem [hướng dẫn kiểm thử](docs/testing.md) và [37 tình huống theo chức năng](docs/test-cases.json) để xem tiền điều kiện, bước và kết quả mong đợi; kết quả từng ca được sinh trong báo cáo JSON.
+Đã tách unit test khỏi API/database test. `test:ci` kiểm tra cú pháp, danh mục ca và toàn bộ backend với ngưỡng coverage 95% dòng, 85% nhánh, 90% hàm; xuất JUnit/JSON/LCOV vào `artifacts/tests/coverage/`. CI GitHub có job Node24 Ubuntu/Windows, PostgreSQL16 và Chromium. Xem [hướng dẫn kiểm thử](docs/testing.md) và [39 tình huống theo chức năng](docs/test-cases.json) để xem tiền điều kiện, bước và kết quả mong đợi; kết quả từng ca được sinh trong báo cáo JSON.
 
 Xem [tình huống và dữ liệu test](docs/test-scenarios.md) để thử mã ưu đãi, vé khứ hồi, các trạng thái thanh toán, chuyến hết ghế và tài khoản nhà xe. Dữ liệu tình huống được thêm một lần, giữ nguyên vé bạn đã tạo. `npm run seed` bổ sung kho chuyến, không xóa dữ liệu. Lộ trình và chứng từ mẫu đều có nhãn minh họa.
 
