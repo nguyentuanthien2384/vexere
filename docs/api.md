@@ -41,7 +41,11 @@ Tiền tố `/api`. JSON UTF-8. Xác thực dùng cookie phiên `ticket4t.sid`. 
 }
 ```
 
-Giá được tính từ database, không nhận tổng tiền do client gửi. Tối đa 6 ghế mỗi lần. Với `vnpay`, response có `paymentUrl` khi cổng được cấu hình và giữ ghế 15 phút. Không sử dụng đặt chỗ minh họa để thanh toán thật.
+Giá được tính từ database, không nhận tổng tiền do client gửi. Tối đa 6 ghế mỗi lần. `paymentMethod` nhận `cash`, `vnpay`, `momo`, `zalopay`; chỉ cổng có cấu hình hợp lệ mới được mở. Thanh toán online giữ ghế 15 phút. Response có `paymentUrl` khi khởi tạo thành công. Nếu MoMo/ZaloPay không trả kết quả sau khi đặt chỗ đã lưu, HTTP 201 vẫn trả `booking` và `paymentError:{code,message}` để khách tra cứu/đối soát. Không sử dụng đặt chỗ minh họa để thanh toán thật.
+
+`POST /bookings` và `POST /orders` hỗ trợ header `Idempotency-Key`: 16–128 ký tự chữ/số hoặc `._:-`. Client tạo giá trị ngẫu nhiên ít nhất 128 bit và giữ nguyên cả key lẫn body khi thử lại sau mất kết nối. Cùng key và body trả đơn đã tạo với trạng thái hiện tại, `replayed:true`, header `Idempotency-Replayed:true`; không giữ ghế, dùng ưu đãi hoặc gửi email lần hai. Cùng key nhưng body/endpoint khác trả 409 `IDEMPOTENCY_CONFLICT`. Khóa của tài khoản được giới hạn theo user; khóa khách vãng lai là quyền khôi phục bí mật và yêu cầu đúng toàn bộ payload ban đầu. Database lưu hash khóa. Thay thông tin đặt vé cần khóa mới; không dùng retry để tạo đơn khác. Giao diện lưu lần gửi chưa rõ kết quả trong sessionStorage để khôi phục sau khi tải lại.
+
+`POST /bookings/:code/payment-link` nhận `{phone}` hoặc phiên tài khoản sở hữu vé; trả `{booking,paymentUrl}` cho vé online còn chờ và chưa hết hạn. Không kéo dài giữ ghế. VNPAY tạo lại URL có chữ ký; MoMo/ZaloPay sử dụng cùng mã đơn merchant và URL đã lưu. Nếu kết quả khởi tạo ví chưa xác định, trả `PAYMENT_RECONCILIATION_REQUIRED` và không gửi yêu cầu tạo đơn thu tiền thứ hai. Chờ IPN/đối soát với cổng; API này không tự xác nhận thanh toán. Giao diện tra cứu kiểm tra trạng thái trong tối đa một phút, có nút làm mới thủ công.
 
 `POST /holds` nhận `{tripId,seats}`; trả về `{hold:{token,tripId,seats,expiresAt}}`. Thời hạn 5 phút. Token ngẫu nhiên 256 bit là quyền sử dụng/giải phóng giữ ghế, cần giữ bí mật; database chỉ lưu bản băm. Phiên khách dùng để nhận diện ghế của mình và thay giữ chỗ. `DELETE /holds/:token` giải phóng giữ ghế khi có token đúng. Gửi `holdToken` khi tạo vé để chuyển giữ ghế thành đặt chỗ; token hết hạn không được dùng. Token vẫn dùng được khi khách đăng nhập trong lúc điền thông tin.
 
@@ -104,5 +108,50 @@ Chuyến quản lý cần `operatorId`, `from`, `to`, `date`, `departureTime`, `
 
 - `GET /payments/vnpay/ipn`: xác minh chữ ký, mã merchant, mã vé, số tiền và trạng thái; lặp callback không ghi tiền hai lần.
 - `GET /payments/vnpay/return`: kiểm tra chữ ký, chuyển về tra cứu vé; không đánh dấu đã thanh toán.
+- `POST /payments/momo/ipn`: xác minh HMAC-SHA256, partner, requestId/mã đơn đã lưu và đúng số tiền. Xử lý thành công trả HTTP 204.
+- `POST /payments/zalopay/ipn`: kiểm tra MAC key2 trên chuỗi `data` nguyên gốc, app_id, mã đơn đã lưu, số tiền và loại callback đơn hàng. Trả `{return_code:1,return_message:"success"}` khi đã xử lý; MAC sai `-1`, cần thử lại `0`.
+- `GET /payments/momo/return`, `GET /payments/zalopay/return`: chuyển về tra cứu bằng `code`, không ghi nhận tiền. Trình duyệt trong cùng phiên có thể phục hồi số điện thoại từ sessionStorage; phiên khác vẫn phải nhập mã và số điện thoại.
+
+Hai endpoint IPN ví nhận yêu cầu server-to-server và xác thực bằng chữ ký, không phụ thuộc cookie/origin trình duyệt. Các API ghi khác vẫn kiểm tra cùng origin. Callback lặp không ghi tiền hai lần; callback thành công đến sau khi ghế hết hạn hoặc đã bán lại ghi khoản đã nhận vào hàng chờ hoàn tiền, không lấy ghế của khách sau. Hoàn tiền cần chứng từ đối soát của nhân viên; chưa gọi API hoàn tiền tự động.
+
+MoMo dùng `captureWallet`, khóa `MOMO_PARTNER_CODE`, `MOMO_ACCESS_KEY`, `MOMO_SECRET_KEY` và `MOMO_URL`. ZaloPay dùng `ZALOPAY_APP_ID`, `ZALOPAY_KEY1`, `ZALOPAY_KEY2`, `ZALOPAY_URL`. Mẫu `.env.example` dùng endpoint sandbox chính thức. Production yêu cầu endpoint live chính thức và APP_URL HTTPS. Khứ hồi hiện vẫn chỉ thanh toán tại nhà xe. Tài liệu giao thức: [MoMo tạo thanh toán](https://developers.momo.vn/v3/docs/payment/api/wallet/onetime/), [MoMo IPN](https://developers.momo.vn/v3/docs/payment/api/result-handling/notification/), [ZaloPay tạo đơn](https://docs.zalopay.vn/docs/specs/order-create/), [ZaloPay callback](https://docs.zalopay.vn/docs/developer-tools/knowledge-base/callback/).
 
 Tham số/chữ ký tuân theo [tài liệu VNPAY PAY](https://sandbox.vnpayment.vn/apis/docs/thanh-toan-pay/pay.html). Đăng ký URL IPN public và thông tin merchant với cổng thanh toán trước khi vận hành.
+
+## Kết nối API lịch nhà xe
+
+Chỉ quản trị viên có quyền đọc `GET /admin/integrations`. Endpoint trả số lượng dữ liệu mẫu/nhà xe, tình trạng cấu hình feed, VNPAY, MoMo, ZaloPay, SMTP và database. `configured` chỉ xác nhận cấu hình cục bộ; `externallyVerified:false` thể hiện chưa kiểm chứng dịch vụ thật. Không trả khóa, mã merchant, URL máy chủ, chuỗi kết nối hoặc dữ liệu khách.
+
+Khi đã có đối tác, cấu hình `OPERATOR_FEED_URL`, `OPERATOR_FEED_TOKEN`, `OPERATOR_FEED_OPERATOR_ID` trong `.env`. Tạo hồ sơ nhà xe vận hành trước và dùng ID của hồ sơ đó. Máy chủ gọi GET tới URL cố định với `Authorization: Bearer <token>`. HTTPS bắt buộc; HTTP loopback chỉ dùng phát triển/kiểm thử. Không theo redirect; timeout mặc định 8 giây (`OPERATOR_FEED_TIMEOUT_MS`, 100–30000 ms), phản hồi tối đa 1 MB, tối đa 500 chuyến.
+
+Đối tác hoặc adapter cần chuẩn hóa phản hồi theo hợp đồng của Ticket4T:
+
+```json
+{
+  "version": 1,
+  "sourceReference": "Lịch được xác nhận / kho ghế phân bổ theo hợp đồng",
+  "trips": [{
+    "externalId": "ma-luot-khoi-hanh-duy-nhat",
+    "from": "ho-chi-minh",
+    "to": "da-lat",
+    "date": "2026-10-12",
+    "departureTime": "22:00",
+    "durationMinutes": 420,
+    "type": "sleeper",
+    "price": 250000,
+    "totalSeats": 20,
+    "pickupPoints": ["Bến xe đi"],
+    "dropoffPoints": ["Bến xe đến"],
+    "amenities": ["Điều hòa"],
+    "policies": ["Có mặt trước 30 phút"],
+    "active": true
+  }]
+}
+```
+
+`externalId` phải ổn định và duy nhất cho từng lượt khởi hành, không chỉ từng tuyến. `operatorId` luôn lấy từ cấu hình máy chủ. Có thể gửi `seatPrices` hợp lệ theo sơ đồ. Không nhận trường trạng thái ghế đã bán/giữ từ hệ thống khác. Chỉ mở bán phần ghế được nhà xe phân bổ riêng cho Ticket4T; API giữ/đặt/hủy ghế liên hệ thống cần triển khai theo tài liệu đối tác thực tế.
+
+- `POST /admin/integrations/operator-feed/preview` body `{}`: đọc feed và kiểm tra toàn bộ; trả `preview:{digest,sourceReference,counts:{created,updated,unchanged},trips:[…]}`. Chưa nhập lịch.
+- `POST /admin/integrations/operator-feed/apply` body `{digest}`: đọc lại feed; khác digest trả 409 `OPERATOR_FEED_CHANGED`. Kiểm tra lại giữ ghế/đặt chỗ trong giao dịch; một chuyến lỗi rollback toàn đợt. Upsert bằng ánh xạ nhà xe + externalId; đồng bộ lại không sinh chuyến trùng. Ghi nhật ký khi có thay đổi.
+
+Chuyến đã có khách/giữ ghế không được sửa lịch, tuyến, giá, số chỗ hoặc điểm đón/trả. Chuyến vắng trong feed vẫn giữ nguyên: muốn ngừng bán cần đối tác gửi `active:false` và xử lý khách hiện có theo quy trình vận hành. Đây là đồng bộ lịch theo lần chạy từ trang **Kết nối API**, chưa có tác vụ nền tự động, kết nối Vexere hoặc đồng bộ tồn ghế đa kênh.

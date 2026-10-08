@@ -11,6 +11,9 @@ const {parseCsv} = require('./import');
 const {createBookingFeatures,BOOKING_LEAD_MINUTES}=require('./booking-features');
 const {initializeDemoFixtures}=require('./demo-fixtures');
 const {adminStats,dateRange,addDateClauses,bookingTripField}=require('./admin-analytics');
+const {getIntegrationStatus}=require('./integration-status');
+const {fetchOperatorFeed}=require('./operator-feed');
+const {createWalletPayments}=require('./wallet-payments');
 
 class ApiError extends Error { constructor(status,message,code='VALIDATION_ERROR') { super(message); this.status = status; this.code = code; } }
 function fail(status,message,code) { throw new ApiError(status,message,code); }
@@ -54,7 +57,8 @@ async function createApi(options={}) {
   const router = express.Router();
   const dummyPasswordHash=await bcrypt.hash(crypto.randomBytes(32).toString('hex'),12);
   const mail = createMailer(db,env,options.dataDir);
-  const paymentMethods = [{id:'cash',name:'Thanh toán tại nhà xe',enabled:true},{id:'vnpay',name:'VNPAY',enabled:payments.configured(env)}];
+  const walletPayments=createWalletPayments({db,env,fail,fetchImpl:options.walletFetch,timeoutMs:options.walletTimeoutMs});
+  const paymentMethods = [{id:'cash',name:'Thanh toán tại nhà xe',enabled:true},{id:'vnpay',name:'VNPAY',enabled:payments.configured(env)},...['momo','zalopay'].map(id=>({id,name:id==='momo' ? 'MoMo' : 'ZaloPay',enabled:walletPayments.configured(id)}))];
   const lock = db.dialect === 'postgres' ? ' FOR UPDATE' : '';
   const bookingCutoff = () => new Date(Date.now()+BOOKING_LEAD_MINUTES*60000).toISOString();
 
@@ -173,7 +177,7 @@ async function createApi(options={}) {
     const trips = rows.map(decorate);
     return {trips,total:Number(count.n),page,pages:Math.ceil(Number(count.n)/limit)};
   }
-  features=createBookingFeatures({db,env,fail,endpoint,clean,phone,validPhone,validEmail,getTrip,getBooking,bookingOwner,audit,adminAudit,staffActor,expire,refreshExpired,requireUser,requireAdmin,scope,payments,mail});
+  features=createBookingFeatures({db,env,fail,endpoint,clean,phone,validPhone,validEmail,getTrip,getBooking,bookingOwner,audit,adminAudit,staffActor,expire,refreshExpired,requireUser,requireAdmin,scope,payments,walletPayments,mail});
   features.installPublic(router);
 
   router.get('/health',endpoint(async (req,res) => { await db.get('SELECT 1 AS ok'); res.json({ok:true,database:db.dialect,dataMode:await mode()}); }));
@@ -299,8 +303,38 @@ async function createApi(options={}) {
 
   router.post('/bookings',endpoint(async (req,res) => {
     const result=await features.checkout(req,[req.body]),booking=result.bookings[0];
-    const emailDelivery=await features.notify(booking);
-    res.status(201).json({booking,emailDelivery,...(booking.paymentMethod === 'vnpay' ? {paymentUrl:payments.paymentUrl(booking,req,env)} : {})});
+    const emailDelivery=result.replayed ? {delivered:false,skipped:true} : await features.notify(booking);
+    let paymentUrl=payments.paymentUrl(booking,req,env),paymentError;
+    if (['momo','zalopay'].includes(booking.paymentMethod) && booking.status==='pending_payment' && booking.paymentStatus==='pending') {
+      try { paymentUrl=await walletPayments.createPaymentLink(booking,req); }
+      catch (error) {
+        // The reservation already committed. Return its recovery details even
+        // when the provider response is missing; never hide a created booking.
+        if (!(error instanceof ApiError)) throw error;
+        paymentError={code:error.code,message:error.message};
+      }
+    }
+    if (result.replayed) res.set('Idempotency-Replayed','true');
+    res.status(201).json({booking,emailDelivery,...(paymentUrl ? {paymentUrl} : {}),...(paymentError ? {paymentError} : {}),...(result.replayed ? {replayed:true} : {})});
+  }));
+  router.post('/bookings/:code/payment-link',endpoint(async (req,res) => {
+    const code=clean(req.params.code,30).toUpperCase();
+    const initial=await getBooking(code);
+    if (!initial || !bookingOwner(req,initial)) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
+    const booking=await db.transaction(async tx=>{
+      await tx.get('SELECT id FROM trips WHERE id=?'+lock,[initial.tripId]);
+      await expire(tx,initial.tripId);
+      const current=await getBooking(code,tx);
+      if (!bookingOwner(req,current)) fail(404,'Không tìm thấy đặt chỗ.','NOT_FOUND');
+      return current;
+    });
+    if (!['vnpay','momo','zalopay'].includes(booking.paymentMethod) || booking.status !== 'pending_payment' || booking.paymentStatus !== 'pending' || !Number.isFinite(Date.parse(booking.expiresAt)) || Date.parse(booking.expiresAt)<=Date.now()) fail(409,'Đặt chỗ không còn chờ thanh toán trực tuyến.','PAYMENT_NOT_PAYABLE');
+    if (['momo','zalopay'].includes(booking.paymentMethod)) return res.json({booking,paymentUrl:await walletPayments.createPaymentLink(booking,req)});
+    if (!payments.configured(env)) fail(503,'VNPAY chưa được cấu hình. Vui lòng liên hệ nhà xe.','PAYMENT_UNAVAILABLE');
+    if (!payments.acceptsSource(booking,env)) fail(409,'Đặt chỗ minh họa chỉ được thanh toán trên VNPAY sandbox.','DEMO_PAYMENT_BLOCKED');
+    const paymentUrl=payments.paymentUrl(booking,req,env);
+    if (!paymentUrl) fail(409,'Đặt chỗ đã hết thời gian thanh toán.','PAYMENT_NOT_PAYABLE');
+    res.json({booking,paymentUrl});
   }));
   router.get('/bookings/lookup',endpoint(async (req,res) => {
     await refreshExpired();
@@ -398,7 +432,57 @@ async function createApi(options={}) {
     res.redirect('/#/lookup?code='+encodeURIComponent(params.vnp_TxnRef));
   }));
 
+  async function settleWallet(notification) {
+    if (notification.pending) return;
+    const {bookingCode:code,provider,reference,amount,success}=notification;
+    const initial=await db.get('SELECT trip_id FROM bookings WHERE code=?',[code]);
+    if (!initial) fail(404,'Không tìm thấy giao dịch.','NOT_FOUND');
+    await db.transaction(async tx=>{
+      await tx.get('SELECT id FROM trips WHERE id=?'+lock,[initial.trip_id]);
+      const row=await tx.get('SELECT * FROM bookings WHERE code=?'+lock,[code]);
+      if (row.payment_method!==provider || row.total!==amount) fail(400,'Thông tin thanh toán không khớp.','PAYMENT_MISMATCH');
+      if (db.dialect==='postgres') await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',['payment:'+reference]);
+      const prior=await tx.get('SELECT booking_code FROM payments WHERE reference=?',[reference]);
+      if (prior && prior.booking_code!==code) fail(409,'Mã giao dịch đã được sử dụng.','PAYMENT_CONFLICT');
+      if (prior || ['paid','refund_pending','refunded'].includes(row.payment_status)) return;
+      if (!success) {
+        if (row.status==='pending_payment') {
+          await tx.run("UPDATE bookings SET status='cancelled',expires_at=NULL WHERE code=?",[code]);
+          await tx.run('DELETE FROM reserved_seats WHERE booking_code=?',[code]);
+          await features.releasePromotion(tx,code);
+          await audit(tx,code,provider,'payment_failed');
+        }
+        return;
+      }
+      await expire(tx,initial.trip_id);
+      const current=await tx.get('SELECT status FROM bookings WHERE code=?',[code]);
+      const seats=await tx.get('SELECT COUNT(*) AS n FROM reserved_seats WHERE booking_code=?',[code]);
+      const fulfil=current.status==='pending_payment' && Number(seats.n)===parse(row.data).seats.length;
+      await tx.run('INSERT INTO payments(reference,booking_code,provider,amount,status,created_at,data) VALUES(?,?,?,?,?,?,?)',[reference,code,provider,amount,fulfil ? 'paid' : 'refund_pending',nowISO(),json({reference,amount})]);
+      await tx.run('UPDATE bookings SET status=?,payment_status=?,expires_at=NULL WHERE code=?',[fulfil ? 'confirmed' : 'refund_pending',fulfil ? 'paid' : 'refund_pending',code]);
+      await audit(tx,code,provider,fulfil ? 'payment_verified' : 'late_payment_refund_required',{reference});
+    });
+  }
+  router.post('/payments/momo/ipn',endpoint(async(req,res)=>{
+    const notification=await walletPayments.verifyNotification('momo',req.body);
+    if (!notification) fail(400,'Thông báo thanh toán không hợp lệ.','INVALID_PAYMENT_SIGNATURE');
+    await settleWallet(notification);
+    res.status(204).end();
+  }));
+  router.post('/payments/zalopay/ipn',endpoint(async(req,res)=>{
+    const notification=await walletPayments.verifyNotification('zalopay',req.body);
+    if (!notification) return res.json({return_code:-1,return_message:'Invalid callback'});
+    try { await settleWallet(notification); }
+    catch { return res.json({return_code:0,return_message:'Retry callback'}); }
+    res.json({return_code:1,return_message:'success'});
+  }));
+  for (const provider of ['momo','zalopay']) router.get('/payments/'+provider+'/return',endpoint(async(req,res)=>{
+    // The browser only resumes lookup. Signed server callbacks own settlement.
+    res.redirect('/#/lookup?code='+encodeURIComponent(clean(req.query.code,30).toUpperCase()));
+  }));
+
   router.use('/admin',requireStaff);
+  router.get('/admin/integrations',requireAdmin,endpoint(async (req,res) => res.json(await getIntegrationStatus({db,env}))));
   features.installAdmin(router);
   router.get('/admin/audit',endpoint(async (req,res) => {
     const {page,limit}=pageArgs(req.query),range=dateRange(req.query,fail),clauses=[],args=[];
@@ -499,6 +583,51 @@ async function createApi(options={}) {
       image:op.image,seatPrices,source:current.source === 'demo' ? 'demo' : 'managed',provenance,active:input.active === undefined ? current.active !== false : Boolean(input.active)};
   }
   async function insertManaged(req,input,tx=db) { const trip=await validateTrip(input,{},tx); scope(req,trip.operatorId); return trip; }
+  async function syncOperatorFeed(req,apply=false) {
+    let feed;
+    try { feed=await fetchOperatorFeed(env); }
+    catch (error) { fail(error.status || 502,error.message,error.code || 'OPERATOR_FEED_UPSTREAM'); }
+    if (apply && (!/^[a-f0-9]{64}$/.test(req.body.digest || '') || req.body.digest!==feed.digest)) fail(409,'Lịch đối tác đã thay đổi. Đọc lại và xem trước dữ liệu mới trước khi áp dụng.','OPERATOR_FEED_CHANGED');
+    return db.transaction(async tx => {
+      await staffActor(tx,req);
+      if (req.user.role!=='admin') fail(403,'Chỉ quản trị viên có quyền đồng bộ API.','FORBIDDEN');
+      if (db.dialect==='postgres') await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',['operator-feed:'+feed.operatorId]);
+      // Lock in a stable order shared with checkout. Preview and apply both check
+      // current reservations; the preview digest never bypasses these checks.
+      for (const input of feed.trips) await tx.get('SELECT id FROM trips WHERE id=?'+lock,[input.id]);
+      const changes=[],counts={created:0,updated:0,unchanged:0};
+      const protectedFields=['operatorId','from','to','date','departureTime','type','totalSeats','price','seatPrices','durationMinutes','pickupPoints','dropoffPoints'];
+      const contentFields=[...protectedFields,'amenities','policies','provenance','active'];
+      for (const input of feed.trips) {
+        const current=await getTrip(input.id,tx);
+        if (current && (current.source!=='managed' || current.operatorId!==feed.operatorId || current.feedExternalId!==input.externalId)) fail(409,'Mã chuyến đối tác xung đột với kho hiện tại. Kiểm tra ánh xạ nhà xe.','OPERATOR_FEED_CONFLICT');
+        const trip=await validateTrip(input,current || {id:input.id},tx);
+        trip.feedExternalId=input.externalId;
+        await expire(tx,trip.id);
+        if (current) {
+          const occupied=await tx.get('SELECT (SELECT COUNT(*) FROM reserved_seats WHERE trip_id=?) + (SELECT COUNT(*) FROM hold_seats WHERE trip_id=?) AS n',[trip.id,trip.id]);
+          if (Number(occupied.n) && protectedFields.some(key=>json(current[key] ?? (key==='seatPrices' ? {} : undefined))!==json(trip[key]))) fail(409,'Chuyến '+input.externalId+' đã có khách hoặc đang giữ ghế; không thể cập nhật lịch, giá hay sơ đồ.','HAS_BOOKINGS');
+        }
+        const change=!current ? 'created' : contentFields.some(key=>json(current[key] ?? (key==='seatPrices' ? {} : []))!==json(trip[key] ?? (key==='seatPrices' ? {} : []))) ? 'updated' : 'unchanged';
+        counts[change]++;
+        changes.push({trip,change});
+      }
+      if (apply) {
+        for (const {trip,change} of changes) {
+          if (change==='created') await tx.run(INSERT_TRIP,tripToRow(trip));
+          if (change==='updated') {
+            const values=tripToRow(trip);
+            await tx.run('UPDATE trips SET operator_id=?,from_id=?,to_id=?,date=?,departure_time=?,departure_at=?,price=?,total_seats=?,type=?,active=?,source=?,data=? WHERE id=?',[...values.slice(1),trip.id]);
+          }
+        }
+        if (counts.created || counts.updated) await adminAudit(tx,req,'operator_feed_synced','import',feed.digest,feed.operatorId,{...counts,sourceReference:feed.sourceReference,tripIds:changes.filter(item=>item.change!=='unchanged').map(item=>item.trip.id)});
+        return {sync:counts};
+      }
+      return {preview:{digest:feed.digest,sourceReference:feed.sourceReference,counts,trips:changes.map(({trip,change})=>({id:trip.id,externalId:trip.feedExternalId,fromName:trip.fromName,toName:trip.toName,date:trip.date,departureTime:trip.departureTime,price:trip.price,change}))}};
+    });
+  }
+  router.post('/admin/integrations/operator-feed/preview',requireAdmin,endpoint(async (req,res)=>res.json(await syncOperatorFeed(req))));
+  router.post('/admin/integrations/operator-feed/apply',requireAdmin,endpoint(async (req,res)=>res.json(await syncOperatorFeed(req,true))));
   router.post('/admin/trips',endpoint(async (req,res) => {
     const trip=await db.transaction(async tx=>{await staffActor(tx,req);const trip=await insertManaged(req,req.body,tx);await tx.run(INSERT_TRIP,tripToRow(trip));await adminAudit(tx,req,'trip_created','trip',trip.id,trip.operatorId,{date:trip.date,departureTime:trip.departureTime,from:trip.from,to:trip.to,price:trip.price,totalSeats:trip.totalSeats});return trip;});res.status(201).json({trip:await getTrip(trip.id)});
   }));

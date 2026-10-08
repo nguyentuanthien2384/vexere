@@ -19,6 +19,12 @@ async function createApp(options = {}) {
   if (production && env.VNPAY_TMN_CODE && env.VNPAY_HASH_SECRET && (!env.VNPAY_URL || /sandbox/i.test(env.VNPAY_URL))) {
     throw new Error('Production requires the live VNPAY_URL supplied in your merchant agreement.');
   }
+  if (production) {
+    const {providerConfig}=require('./server/wallet-payments');
+    for (const [provider,keys] of [['momo',['MOMO_PARTNER_CODE','MOMO_ACCESS_KEY','MOMO_SECRET_KEY']],['zalopay',['ZALOPAY_APP_ID','ZALOPAY_KEY1','ZALOPAY_KEY2']]]) {
+      if (keys.every(key=>env[key]) && !providerConfig(provider,env).configured) throw new Error('Production requires valid live '+provider.toUpperCase()+' merchant configuration.');
+    }
+  }
   let sessionSecret = env.SESSION_SECRET;
   if (!sessionSecret) {
     const directory = path.resolve(options.dataDir || env.DATA_DIR || path.join(__dirname, 'data'));
@@ -48,6 +54,9 @@ async function createApp(options = {}) {
   app.use('/api', (req, res, next) => {
     res.set('Cache-Control', 'no-store');
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      // Wallet IPNs authenticate the provider signature inside the handler and
+      // cannot use browser origin or customer cookies as their authentication.
+      if (req.method==='POST' && /^\/payments\/(momo|zalopay)\/ipn\/?$/.test(req.path)) return next();
       const origin = req.get('origin');
       const expectedOrigin = env.APP_URL ? new URL(env.APP_URL).origin : `${req.protocol}://${req.get('host')}`;
       if (req.get('sec-fetch-site') === 'cross-site' || (origin && origin !== expectedOrigin)) {

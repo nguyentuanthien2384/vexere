@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS bookings (code TEXT PRIMARY KEY, trip_id TEXT NOT NUL
 CREATE INDEX IF NOT EXISTS bookings_user_idx ON bookings(user_id,created_at);
 CREATE INDEX IF NOT EXISTS bookings_trip_idx ON bookings(trip_id,status);
 CREATE INDEX IF NOT EXISTS bookings_created_idx ON bookings(created_at);
+CREATE TABLE IF NOT EXISTS checkout_requests (key_hash TEXT PRIMARY KEY, request_hash TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS payment_attempts (booking_code TEXT NOT NULL REFERENCES bookings(code), provider TEXT NOT NULL, merchant_order_id TEXT UNIQUE NOT NULL, request_id TEXT NOT NULL, amount INTEGER NOT NULL, status TEXT NOT NULL, payment_url TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(booking_code,provider));
 CREATE TABLE IF NOT EXISTS reserved_seats (trip_id TEXT NOT NULL REFERENCES trips(id), seat TEXT NOT NULL, booking_code TEXT NOT NULL REFERENCES bookings(code), PRIMARY KEY(trip_id,seat));
 CREATE TABLE IF NOT EXISTS seat_holds (hash TEXT PRIMARY KEY, trip_id TEXT NOT NULL REFERENCES trips(id), owner_key TEXT NOT NULL, expires_at TEXT NOT NULL, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS seat_holds_expiry_idx ON seat_holds(expires_at,trip_id);

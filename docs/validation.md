@@ -1,5 +1,17 @@
 # Kết quả kiểm tra bản 3 — 07/10/2026
 
+## Tích hợp API và phục hồi thanh toán — 08/10/2026
+
+- `npm test`: 98/98 kiểm thử đạt trên SQLite và ranh giới HTTP. Bổ sung 45 kiểm thử cho chống gửi trùng/phục hồi sau restart, URL thanh toán, chữ ký/kiểu dữ liệu/trạng thái MoMo, MAC ZaloPay, callback lặp/đồng thời, tiền đến muộn, lỗi mạng sau khi đơn đã lưu, cấu hình và đồng bộ feed nhà xe.
+- `npm run check`: 55 file JavaScript hợp lệ cú pháp; `git diff --check` đạt.
+- `npm run test:ui`, `npm run test:ui:advanced`, `npm run test:ui:regression` (11 tình huống) và `npm run test:ui:admin` (15 tình huống) đạt.
+- `npm run test:ui:api`: đạt thử lại đơn một chiều/khứ hồi sau mất phản hồi và reload; đổi dữ liệu đổi key; VNPAY/MoMo/ZaloPay tạo → quay về → tiếp tục → cập nhật đã thanh toán; lỗi tạo ví vẫn hiển thị đơn để đối soát; phản hồi trễ không đổi trang đang xem; ghế cập nhật tại chỗ giữ focus.
+- `npm run test:ui:integrations`: 6 tình huống đạt, gồm cấu hình thiếu/đủ, xem trước chưa ghi dữ liệu, áp dụng/cập nhật không trùng, dữ liệu đổi sau xem trước bị chặn, quyền admin và bố cục desktop/mobile. Đã xem ảnh `artifacts/screenshots/integrations-desktop.png` và `integrations-mobile.png`.
+
+Đã đối chiếu giao diện công khai [Vexere](https://vexere.com/) và giao thức thanh toán từ tài liệu chính thức MoMo/ZaloPay. Đợt này dùng database tạm, API nhà xe giả lập và callback có chữ ký kiểm thử; không thay dữ liệu của người dùng, không gọi merchant hoặc chuyển tiền thật. Chưa xác minh PostgreSQL, Docker, SMTP, merchant thực hay API nhà xe cụ thể trong đợt này.
+
+API nhà xe mới đồng bộ lịch/giá/kho được phân bổ riêng theo JSON chuẩn hóa, có xem trước và upsert theo externalId. Chưa có API giữ/đặt/hủy ghế đa kênh hoặc kết nối Vexere; cần tài liệu đối tác để bổ sung phần này. Khứ hồi vẫn thanh toán tại nhà xe. Thanh toán ví mất phản hồi không tạo thêm đơn merchant; chờ IPN hoặc đối soát tại cổng. Chưa tự truy vấn lại giao dịch hoặc gọi API hoàn tiền. `.env` thật được giữ nguyên, các khóa mới có mẫu tại `.env.example`.
+
 ## Nâng cấp trang quản trị — 08/10/2026
 
 - `npm run check`: 42 file JavaScript hợp lệ cú pháp; `git diff --check` đạt.

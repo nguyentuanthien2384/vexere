@@ -11,6 +11,9 @@ test('production refuses an incomplete deployment before touching a database', a
   await assert.rejects(createApp({ env: { NODE_ENV: 'production', SESSION_SECRET: 'x'.repeat(48) } }), /DATABASE_URL/);
   await assert.rejects(createApp({ env: { NODE_ENV: 'production', SESSION_SECRET: 'x'.repeat(48), DATABASE_URL: 'postgres://unused', SEED_DEMO: 'true' } }), /SEED_DEMO/);
   await assert.rejects(createApp({ env: { NODE_ENV: 'production', SESSION_SECRET: 'x'.repeat(48), DATABASE_URL: 'postgres://unused', APP_URL: 'http://example.com' } }), /HTTPS/);
+  const deployment={NODE_ENV:'production',SESSION_SECRET:'x'.repeat(48),DATABASE_URL:'postgres://unused',APP_URL:'https://example.com'};
+  await assert.rejects(createApp({env:{...deployment,MOMO_PARTNER_CODE:'test',MOMO_ACCESS_KEY:'test',MOMO_SECRET_KEY:'test'}}),/live MOMO/);
+  await assert.rejects(createApp({env:{...deployment,ZALOPAY_APP_ID:'123',ZALOPAY_KEY1:'test',ZALOPAY_KEY2:'test'}}),/live ZALOPAY/);
 });
 
 test('web boundary rejects cross-site writes and keeps secrets and legacy maintenance URLs inaccessible', async t => {

@@ -21,10 +21,12 @@ const pages = {
   users: ['Tài khoản','NHÂN SỰ & PHÂN QUYỀN','Cấp quyền vận hành cho nhân viên theo từng nhà xe.'],
   audit: ['Nhật ký vận hành','TRUY VẾT & ĐỐI SOÁT','Theo dõi thay đổi lịch trình, quyền truy cập và chứng từ trong phạm vi quản lý.'],
   import: ['Nhập lịch trình','KẾT NỐI DỮ LIỆU NHÀ XE','Đưa lịch chạy do nhà xe cung cấp vào hệ thống.'],
+  integrations: ['Kết nối API','DỮ LIỆU & THANH TOÁN','Kiểm tra cấu hình kết nối và đồng bộ lịch chạy từ đối tác.'],
 };
 const state = {user:null,locations:[],operators:[],routes:[],promotions:[],users:[],trips:[],bookings:[],audit:[],page:'dashboard',pageNumber:1,stats:null,editor:null,importTrips:null,manifest:null,loadId:0,sessionId:0,filters:{},importBusy:false,confirm:null};
 const auditLabels = {user_created:'Cấp tài khoản',user_updated:'Đổi thông tin / quyền tài khoản',operator_created:'Thêm nhà xe',operator_updated:'Cập nhật nhà xe',operator_deactivated:'Ngừng hoạt động nhà xe',trip_created:'Thêm chuyến',trip_updated:'Cập nhật chuyến',trip_deactivated:'Ngừng bán chuyến',trip_duplicated:'Sao chép chuyến',trips_imported:'Nhập lịch trình',booking_confirmed:'Xác nhận vé',booking_cancelled:'Hủy vé',counter_booking_created:'Bán vé tại quầy',cash_received:'Ghi nhận thu tiền mặt',refund_recorded:'Ghi nhận hoàn tiền',booking_rescheduled:'Đổi chuyến',promotion_created:'Tạo ưu đãi',promotion_updated:'Cập nhật ưu đãi',promotion_deactivated:'Tạm dừng ưu đãi'};
 const entityLabels = {user:'Tài khoản',operator:'Nhà xe',trip:'Chuyến xe',import:'Đợt nhập',booking:'Đơn vé',promotion:'Ưu đãi'};
+auditLabels.operator_feed_synced = 'Đồng bộ API nhà xe';
 const dateTime = value => { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',dateStyle:'short',timeStyle:'short'}).format(date); };
 const addDateDays = (value, days) => { const date = new Date(`${value}T12:00:00+07:00`); date.setUTCDate(date.getUTCDate()+days); return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit'}).format(date); };
 function validDate(value) { const date = new Date(`${value}T12:00:00+07:00`); return /^\d{4}-\d{2}-\d{2}$/.test(value || '') && !Number.isNaN(date.getTime()) && addDateDays(value,0) === value; }
@@ -166,6 +168,7 @@ async function enterPortal(user) {
   $('[data-page="operators"]').hidden = user.role !== 'admin';
   $('[data-page="users"]').hidden = user.role !== 'admin';
   $('[data-page="promotions"]').hidden = user.role !== 'admin';
+  $('[data-page="integrations"]').hidden = user.role !== 'admin';
   try {
     const [locationData, operatorData] = await Promise.all([api('/locations'), api('/admin/operators')]);
     if (sessionId !== state.sessionId || !state.user) return;
@@ -176,7 +179,7 @@ async function enterPortal(user) {
 }
 async function navigate(page, preserveFilters = false) {
   if (!state.user || !pages[page]) return;
-  if (['operators','users','promotions'].includes(page) && state.user.role !== 'admin') page = 'dashboard';
+  if (['operators','users','promotions','integrations'].includes(page) && state.user.role !== 'admin') page = 'dashboard';
   const previousPage = state.page;
   const oldFilters = preserveFilters ? (previousPage === page && $('#filters') ? Object.fromEntries(new FormData($('#filters'))) : state.filters[page] || {}) : {};
   try { if (['dashboard','audit','bookings'].includes(page)) validateRange(oldFilters); } catch (error) { return toast(error.message,true); }
@@ -204,6 +207,7 @@ async function navigate(page, preserveFilters = false) {
     if (page === 'users') await renderUsers(id,oldFilters);
     if (page === 'audit') await renderAudit(id,oldFilters);
     if (page === 'import') renderImport();
+    if (page === 'integrations') await renderIntegrations(id);
   } catch (error) {
     if (id === state.loadId && state.user) $('#content').innerHTML = `<div class="panel">${empty('Không thể tải dữ liệu',error.message)}<div class="dialog-footer"><button class="button primary" data-action="refresh">Thử lại</button></div></div>`;
   }
@@ -217,7 +221,7 @@ async function renderDashboard(id,filters = {}) {
   state.stats = data;
   state.bookings = bookingData.bookings || [];
   const stats = data.stats || {}, managed = Number(stats.managedTrips || 0), demo = Number(stats.demoTrips || 0), share = managed + demo ? managed / (managed + demo) * 100 : 0;
-  const methods = (data.paymentMethods || []).filter(method => method.enabled).map(method => ({vnpay:'VNPay',cash:'Tiền mặt tại quầy',demo:'Thanh toán mô phỏng'}[method.id] || method.id));
+  const methods = (data.paymentMethods || []).filter(method => method.enabled).map(method => ({vnpay:'VNPAY',momo:'MoMo',zalopay:'ZaloPay',cash:'Tiền mặt tại quầy',demo:'Thanh toán mô phỏng'}[method.id] || method.id));
   $('#content').innerHTML = `<form id="filters" class="filters dashboard-range"><label>Từ ngày<input name="dateFrom" type="date" value="${escapeHTML(filters.dateFrom || '')}"></label><label>Đến ngày<input name="dateTo" type="date" value="${escapeHTML(filters.dateTo || '')}"></label><button class="button primary" type="submit">${icon('filter',16)}Áp dụng</button><button class="button secondary" type="button" data-action="dashboard-range" data-range="7">7 ngày qua</button><button class="button secondary" type="button" data-action="dashboard-range" data-range="30">30 ngày qua</button><button class="button secondary" type="button" data-action="reset-filters">Toàn bộ</button></form><div class="dashboard-period">${filters.dateFrom || filters.dateTo ? `Kỳ báo cáo: ${escapeHTML(formatDate(filters.dateFrom))} → ${escapeHTML(formatDate(filters.dateTo))}` : 'Kỳ báo cáo: toàn bộ dữ liệu'} · Giờ Việt Nam. Đơn theo ngày đặt; chuyến theo ngày khởi hành; tiền theo ngày thu / hoàn.</div>${demo ? '<div class="notice"><span class="notice-icon" data-icon="info"></span><div><strong>Hệ thống đang có dữ liệu mẫu</strong>Lịch mẫu dùng để kiểm thử luồng bán vé. Chỉ lịch trình có nguồn xác nhận từ nhà xe mới dùng để vận hành thực tế.</div></div>' : '<div class="notice teal"><span class="notice-icon" data-icon="shield"></span><div><strong>Lịch trình do nhà xe cung cấp</strong>Dữ liệu vận hành được quản lý theo quyền tài khoản. Kiểm tra tồn chỗ với nhà xe trước khi mở bán.</div></div>'}<div class="stats-grid">${[
     ['Thu ròng sau hoàn',money(stats.revenue),`Đã thu ${money(stats.grossRevenue)} · Hoàn ${money(stats.refundedAmount)}`,'wallet'],
     ['Đơn đặt vé',number(stats.bookings),`${number(stats.pendingBookings)} đơn đang chờ xử lý`,'ticket'],
@@ -400,7 +404,7 @@ async function openBookingDetail(booking) {
   $('#editor-kicker').textContent = 'CHI TIẾT ĐẶT VÉ';
   $('#editor-error').textContent = '';
   $('#editor-fields').innerHTML = `<dl class="detail-list span-2">${[
-    ['Hành khách',booking.fullName],['Kênh tạo vé',booking.channel === 'counter' ? 'Tại quầy' : 'Trực tuyến'],['Người tạo',booking.createdBy || 'Khách hàng'],['Số điện thoại',booking.phone],['Email',booking.email],['Ghế',(booking.seats || []).join(', ')],['Tổng tiền',money(booking.total)],['Trạng thái',statuses[booking.status]?.[0] || booking.status],['Thanh toán',paymentLabel(booking.paymentStatus)],['Phương thức',({vnpay:'VNPay',cash:'Tiền mặt',demo:'Mô phỏng'}[booking.paymentMethod] || booking.paymentMethod)],['Ngày đặt',formatDate(booking.createdAt)],['Ngày đi',`${formatDate(booking.trip?.date)} · ${booking.trip?.departureTime || ''}`],['Điểm đón',booking.pickup],['Điểm trả',booking.dropoff],['Nhà xe',booking.trip?.operatorName],['Nguồn lịch trình',booking.trip?.source === 'demo' ? 'Dữ liệu mẫu' : 'Nhà xe cung cấp'],
+    ['Hành khách',booking.fullName],['Kênh tạo vé',booking.channel === 'counter' ? 'Tại quầy' : 'Trực tuyến'],['Người tạo',booking.createdBy || 'Khách hàng'],['Số điện thoại',booking.phone],['Email',booking.email],['Ghế',(booking.seats || []).join(', ')],['Tổng tiền',money(booking.total)],['Trạng thái',statuses[booking.status]?.[0] || booking.status],['Thanh toán',paymentLabel(booking.paymentStatus)],['Phương thức',({vnpay:'VNPAY',momo:'MoMo',zalopay:'ZaloPay',cash:'Tiền mặt',demo:'Mô phỏng'}[booking.paymentMethod] || booking.paymentMethod)],['Ngày đặt',formatDate(booking.createdAt)],['Ngày đi',`${formatDate(booking.trip?.date)} · ${booking.trip?.departureTime || ''}`],['Điểm đón',booking.pickup],['Điểm trả',booking.dropoff],['Nhà xe',booking.trip?.operatorName],['Nguồn lịch trình',booking.trip?.source === 'demo' ? 'Dữ liệu mẫu' : 'Nhà xe cung cấp'],
   ].map(([label,value]) => `<div><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value || '—')}</dd></div>`).join('')}</dl>`;
   $('#editor-form [type="submit"]').hidden = true;
   $('#editor-fields').insertAdjacentHTML('beforeend','<section class="span-2 audit-panel"><h3>Lịch sử xử lý</h3><div id="audit-events" class="audit-events">Đang tải lịch sử…</div></section>');

@@ -1,0 +1,9 @@
+.integration-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin:22px 0}
+.integration-card .panel-heading{align-items:center;gap:14px;flex-wrap:wrap}
+.integration-card .panel-body{font-size:12px;line-height:1.8;overflow-wrap:anywhere}
+.integration-card ul{padding-left:18px;margin-top:12px;color:var(--muted)}
+.integration-note{font-size:12px;line-height:1.8;color:var(--muted);margin-bottom:18px}
+#feed-feedback{font-size:12px;margin:12px 0;line-height:1.8}
+.feed-summary{display:flex;flex-wrap:wrap;gap:20px;padding:16px;background:var(--pale);border-radius:8px;margin:18px 0;font-size:12px}
+.feed-actions{display:flex;justify-content:flex-end;margin-top:20px}
+@media(max-width:800px){.integration-grid{grid-template-columns:1fr}.integration-grid .panel-heading{padding:18px}.feed-summary{gap:12px}}

@@ -7,9 +7,11 @@
   <title>Vận hành · Ticket4T</title>
   <link rel="icon" href="/app/logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/integrations.css">
   <link rel="stylesheet" href="/app/icons.css">
   <script src="/app/icons.js" defer></script>
   <script src="/admin/admin.js" defer></script>
+  <script src="/admin/integrations.js" defer></script>
   <script src="/admin/counter.js" defer></script>
 </head>
 <body>
@@ -40,6 +42,7 @@
         <button data-page="users" class="nav-button"><span class="nav-icon" data-icon="users"></span>Tài khoản</button>
         <button data-page="audit" class="nav-button"><span class="nav-icon" data-icon="list"></span>Nhật ký vận hành</button>
         <button data-page="import" class="nav-button"><span class="nav-icon" data-icon="upload"></span>Nhập lịch trình</button>
+        <button data-page="integrations" class="nav-button"><span class="nav-icon" data-icon="refresh"></span>Kết nối API</button>
       </nav>
       <div class="sidebar-bottom"><div class="workspace-badge"><span data-icon="shield" data-icon-size="14"></span>Phân quyền theo tài khoản</div><a href="/" class="public-link">Mở trang bán vé <span data-icon="arrow-up-right" data-icon-size="16"></span></a><button id="logout-button" class="logout-button"><span data-icon="logout" data-icon-size="16"></span>Đăng xuất</button></div>
     </aside>

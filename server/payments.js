@@ -8,13 +8,20 @@ function canonical(params) {
 }
 function signature(params, secret) { return crypto.createHmac('sha512',secret).update(canonical(params),'utf8').digest('hex'); }
 function configured(env) { return Boolean(env.VNPAY_TMN_CODE && env.VNPAY_HASH_SECRET && env.APP_URL); }
+function acceptsSource(booking,env) {
+  if (booking.source !== 'demo' && !booking.isDemo) return true;
+  try {
+    const url=new URL(env.VNPAY_URL || 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html');
+    return url.protocol === 'https:' && url.hostname === 'sandbox.vnpayment.vn';
+  } catch { return false; }
+}
 function vietnamTimestamp(date) {
   const parts = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Ho_Chi_Minh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(date);
   const p = Object.fromEntries(parts.map(x => [x.type,x.value]));
   return p.year+p.month+p.day+p.hour+p.minute+p.second;
 }
 function paymentUrl(booking, req, env) {
-  if (!configured(env)) return null;
+  if (!configured(env) || !acceptsSource(booking,env) || booking.paymentMethod !== 'vnpay' || booking.status !== 'pending_payment' || booking.paymentStatus !== 'pending' || Date.parse(booking.expiresAt)<=Date.now() || !Number.isFinite(Date.parse(booking.expiresAt))) return null;
   const ip = req.ip === '::1' ? '127.0.0.1' : (req.ip || '127.0.0.1').replace(/^::ffff:/,'');
   const params = {vnp_Version:'2.1.0',vnp_Command:'pay',vnp_TmnCode:env.VNPAY_TMN_CODE,vnp_Amount:String(booking.total*100),vnp_CurrCode:'VND',
     vnp_TxnRef:booking.code,vnp_OrderInfo:'Thanh toan ve xe '+booking.code,vnp_OrderType:'other',vnp_Locale:'vn',
@@ -38,4 +45,4 @@ function verifiedParams(query, env) {
   return params;
 }
 
-module.exports = {canonical,signature,configured,paymentUrl,verifiedParams,vietnamTimestamp};
+module.exports = {canonical,signature,configured,paymentUrl,verifiedParams,vietnamTimestamp,acceptsSource};

@@ -2,6 +2,7 @@
 
 const crypto=require('node:crypto');
 const {makeSeats}=require('./catalog');
+const {checkoutIdempotency}=require('./checkout-idempotency');
 const BOOKING_LEAD_MINUTES=30;
 
 function createBookingFeatures(ctx) {
@@ -115,24 +116,42 @@ function createBookingFeatures(ctx) {
       createdAt:row.created_at,status,activeTotal:active.reduce((sum,b) => sum+b.total,0),bookings};
   }
   async function checkout(req,inputs,{asOrder=false,staff=false}={}) {
+    const idempotency=staff ? null : checkoutIdempotency(req,fail);
     if(staff && req.body.paymentMethod===undefined)req.body={...req.body,paymentMethod:'cash'};
     const input=req.body,fullName=clean(input.fullName,100),email=clean(input.email,254).toLowerCase(),mobile=phone(input.phone);
-    if (fullName.length<2 || (!(staff && !email) && !validEmail(email)) || !validPhone(mobile)) fail(400,'Thông tin hành khách không hợp lệ.');
-    if (!['cash','vnpay'].includes(input.paymentMethod)) fail(400,'Phương thức thanh toán không hợp lệ.');
-    if(staff && (asOrder || input.paymentMethod!=='cash'))fail(400,'Bán vé tại quầy hiện hỗ trợ một chuyến, thanh toán tiền mặt.','PAYMENT_UNSUPPORTED');
-    if (asOrder && input.paymentMethod !== 'cash') fail(400,'Đơn khứ hồi hiện hỗ trợ thanh toán tại nhà xe. Vui lòng chọn tiền mặt.','PAYMENT_UNSUPPORTED');
-    if (input.paymentMethod === 'vnpay' && !ctx.payments.configured(env)) fail(503,'VNPAY chưa được cấu hình. Vui lòng chọn thanh toán tại nhà xe.','PAYMENT_UNAVAILABLE');
-    if (!Array.isArray(inputs) || inputs.length !== (asOrder ? 2 : 1)) fail(400,'Số chuyến không hợp lệ.');
-    inputs.forEach(validateLeg);
-    const orderCode=asOrder ? newCode('T4O') : null,bookingCodes=inputs.map(() => newCode('T4T'));
     const result=await db.transaction(async tx => {
+      if (idempotency) {
+        if (db.dialect === 'postgres') await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',[idempotency.keyHash]);
+        const previous=await tx.get('SELECT request_hash,result FROM checkout_requests WHERE key_hash=?',[idempotency.keyHash]);
+        if (previous) {
+          if (previous.request_hash !== idempotency.requestHash) fail(409,'Mã yêu cầu đã được dùng cho thông tin đặt vé khác. Vui lòng dùng mã mới.','IDEMPOTENCY_CONFLICT');
+          const saved=parse(previous.result),bookings=[];
+          for (const code of saved.bookingCodes) bookings.push(await getBooking(code,tx));
+          const pending=bookings.filter(b=>b.status === 'pending_payment');
+          await lockTrips(tx,pending.map(b=>b.tripId));
+          for (const tripId of [...new Set(pending.map(b=>b.tripId))].sort()) await expire(tx,tripId);
+          return {bookings:await Promise.all(saved.bookingCodes.map(code=>getBooking(code,tx))),order:saved.orderCode ? await getOrder(saved.orderCode,tx) : null,replayed:true};
+        }
+      }
+      if (fullName.length<2 || (!(staff && !email) && !validEmail(email)) || !validPhone(mobile)) fail(400,'Thông tin hành khách không hợp lệ.');
+      if (!['cash','vnpay','momo','zalopay'].includes(input.paymentMethod)) fail(400,'Phương thức thanh toán không hợp lệ.');
+      if(staff && (asOrder || input.paymentMethod!=='cash'))fail(400,'Bán vé tại quầy hiện hỗ trợ một chuyến, thanh toán tiền mặt.','PAYMENT_UNSUPPORTED');
+      if (asOrder && input.paymentMethod !== 'cash') fail(400,'Đơn khứ hồi hiện hỗ trợ thanh toán tại nhà xe. Vui lòng chọn tiền mặt.','PAYMENT_UNSUPPORTED');
+      if (!Array.isArray(inputs) || inputs.length !== (asOrder ? 2 : 1)) fail(400,'Số chuyến không hợp lệ.');
+      inputs.forEach(validateLeg);
+      const orderCode=asOrder ? newCode('T4O') : null,bookingCodes=inputs.map(() => newCode('T4T'));
+      if (input.paymentMethod === 'vnpay' && !ctx.payments.configured(env)) fail(503,'VNPAY chưa được cấu hình. Vui lòng chọn thanh toán tại nhà xe.','PAYMENT_UNAVAILABLE');
+      if (['momo','zalopay'].includes(input.paymentMethod) && !ctx.walletPayments?.configured(input.paymentMethod)) fail(503,'Ví điện tử chưa được cấu hình. Vui lòng chọn phương thức khác.','PAYMENT_UNAVAILABLE');
       if(staff)await staffActor(tx,req);
       await lockTrips(tx,inputs.map(leg => clean(leg.tripId)));
       for (const tripId of [...new Set(inputs.map(leg => clean(leg.tripId)))].sort()) await expire(tx,tripId);
       const legs=[]; for (const leg of inputs) legs.push(await legInfo(tx,leg));
+      if (input.paymentMethod === 'vnpay' && legs.some(leg=>!ctx.payments.acceptsSource(leg.trip,env))) fail(409,'Chuyến minh họa chỉ được thanh toán trên VNPAY sandbox. Không thể chuyển sang cổng thu tiền thật.','DEMO_PAYMENT_BLOCKED');
+      if (['momo','zalopay'].includes(input.paymentMethod) && legs.some(leg=>!ctx.walletPayments.acceptsSource(input.paymentMethod,leg.trip))) fail(409,'Chuyến minh họa không được thanh toán qua cổng thu tiền thật.','DEMO_PAYMENT_BLOCKED');
       if(staff)for(const leg of legs)scope(req,leg.trip.operatorId);
       if (asOrder) roundTrip(legs);
       const prices=await quote(tx,legs,input.couponCode,mobile,{consume:true});
+      if (input.paymentMethod==='momo' && (prices.total<1000 || prices.total>50000000)) fail(400,'MoMo hỗ trợ số tiền từ 1.000 đến 50.000.000 VND. Vui lòng chọn phương thức khác.','PAYMENT_AMOUNT_UNSUPPORTED');
       const bookingItems=[],createdAt=now();
       if (asOrder) await tx.run('INSERT INTO orders(code,user_id,phone,email,subtotal,discount,total,coupon_code,created_at,data) VALUES(?,?,?,?,?,?,?,?,?,?)',[orderCode,req.user?.id || null,mobile,email,prices.subtotal,prices.discount,prices.total,prices.couponCode,createdAt,JSON.stringify({fullName,bookingCodes,source:legs.some(l => l.trip.source === 'demo') ? 'demo' : 'managed'})]);
       let allocated=0;
@@ -140,7 +159,7 @@ function createBookingFeatures(ctx) {
         const leg=legs[i],code=bookingCodes[i],remainingCapacity=legs.slice(i+1).reduce((sum,item)=>sum+item.subtotal-1,0);
         const proportional=i === legs.length-1 ? prices.discount-allocated : Math.floor(prices.discount*leg.subtotal/prices.subtotal);
         const discount=Math.max(prices.discount-allocated-remainingCapacity,Math.min(leg.subtotal-1,proportional)); allocated+=discount;
-        const expiresAt=input.paymentMethod === 'vnpay' ? new Date(Date.now()+15*60000).toISOString() : null,status=input.paymentMethod === 'vnpay' ? 'pending_payment' : 'reserved';
+        const expiresAt=input.paymentMethod !== 'cash' ? new Date(Date.now()+15*60000).toISOString() : null,status=input.paymentMethod !== 'cash' ? 'pending_payment' : 'reserved';
         const item={code,tripId:leg.trip.id,userId:staff ? null : req.user?.id || null,...(staff ? {createdBy:req.user.id,channel:'counter'} : {}),fullName,email,phone:mobile,seats:leg.seats,pickup:leg.pickup,dropoff:leg.dropoff,paymentMethod:input.paymentMethod,
           paymentStatus:'pending',status,subtotal:leg.subtotal,discount,total:leg.subtotal-discount,couponCode:prices.couponCode,orderCode,createdAt,expiresAt,source:leg.trip.source,provenance:leg.trip.provenance || '',trip:leg.trip};
         await tx.run('INSERT INTO bookings(code,trip_id,user_id,phone,email,status,payment_status,payment_method,total,expires_at,created_at,data,order_code,promo_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[code,leg.trip.id,item.userId,mobile,email,status,'pending',input.paymentMethod,item.total,expiresAt,createdAt,JSON.stringify(item),orderCode,prices.couponCode]);
@@ -154,12 +173,15 @@ function createBookingFeatures(ctx) {
         await tx.run('INSERT INTO promotion_uses(id,code,booking_code,order_code,phone,status,created_at) VALUES(?,?,?,?,?,?,?)',[crypto.randomUUID(),prices.couponCode,asOrder ? null : bookingCodes[0],orderCode,mobile,'active',createdAt]);
         await tx.run('UPDATE promotions SET used_count=? WHERE code=?',[await usageCount(tx,prices.couponCode),prices.couponCode]);
       }
+      if (idempotency) await tx.run('INSERT INTO checkout_requests(key_hash,request_hash,result,created_at) VALUES(?,?,?,?)',[idempotency.keyHash,idempotency.requestHash,JSON.stringify({bookingCodes,orderCode}),createdAt]);
       return {bookings:bookingItems,order:asOrder ? await getOrder(orderCode,tx) : null};
     });
     return result;
   }
-  async function notify(booking) {
-    return ctx.mail({to:booking.email,subject:'Đặt chỗ Ticket4T '+booking.code,text:'Xin chào '+booking.fullName+'\nMã đặt chỗ: '+booking.code+'\n'+booking.trip.fromName+' → '+booking.trip.toName+'\n'+booking.trip.date+' '+booking.trip.departureTime+'\nGhế: '+booking.seats.join(', ')+'\nTổng: '+booking.total+' VND\nTrạng thái: chưa thanh toán.\n'+(booking.source === 'demo' ? 'ĐÂY LÀ DỮ LIỆU MẪU; không phải vé nhà xe thật.' : 'Vui lòng xác nhận thông tin với nhà xe.')});
+  async function notify(bookingOrBookings,order=null) {
+    const bookings=Array.isArray(bookingOrBookings) ? bookingOrBookings : [bookingOrBookings],booking=bookings[0];
+    const itinerary=bookings.map((item,index)=>(bookings.length>1 ? '\nChiều '+(index+1)+'\n' : '')+'Mã đặt chỗ: '+item.code+'\n'+item.trip.fromName+' → '+item.trip.toName+'\n'+item.trip.date+' '+item.trip.departureTime+'\nGhế: '+item.seats.join(', ')+'\nĐiểm đón: '+item.pickup+'\nĐiểm trả: '+item.dropoff+'\nTổng: '+item.total+' VND').join('\n');
+    return ctx.mail({to:booking.email,subject:'Đặt chỗ Ticket4T '+(order?.code || booking.code),text:'Xin chào '+booking.fullName+'\n'+(order ? 'Mã đơn khứ hồi: '+order.code+'\n' : '')+itinerary+(order ? '\nTổng đơn: '+order.total+' VND' : '')+'\nTrạng thái: chưa thanh toán.\n'+(bookings.some(item=>item.source === 'demo') ? 'ĐÂY LÀ DỮ LIỆU MẪU; không phải vé nhà xe thật.' : 'Vui lòng xác nhận thông tin với nhà xe.')});
   }
   function installPublic(router) {
     router.post('/holds',endpoint(async (req,res) => {
@@ -187,7 +209,9 @@ function createBookingFeatures(ctx) {
       res.json({released:true});
     }));
     router.post('/orders',endpoint(async (req,res) => {
-      const result=await checkout(req,req.body.legs,{asOrder:true}); const emailDelivery=await notify(result.bookings[0]); res.status(201).json({order:result.order,emailDelivery});
+      const result=await checkout(req,req.body.legs,{asOrder:true}); const emailDelivery=result.replayed ? {delivered:false,skipped:true} : await notify(result.bookings,result.order);
+      if (result.replayed) res.set('Idempotency-Replayed','true');
+      res.status(201).json({order:result.order,emailDelivery,...(result.replayed ? {replayed:true} : {})});
     }));
     router.get('/orders/lookup',endpoint(async (req,res) => {
       await refreshExpired(); const order=await getOrder(clean(req.query.code,30).toUpperCase());

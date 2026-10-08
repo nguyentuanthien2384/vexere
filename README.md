@@ -2,6 +2,8 @@
 
 Dự án được hoàn thiện từ mã nguồn và bốn tài liệu bạn cung cấp. Bản 3 bổ sung đặt vé khứ hồi, giữ ghế trước thanh toán, ưu đãi có điều kiện, đổi chuyến, so sánh/lưu chuyến và danh sách hành khách cho nhà xe.
 
+Đợt cập nhật 08/10/2026 bổ sung khôi phục đặt vé khi mất kết nối bằng Idempotency-Key, tiếp tục thanh toán, kiểm tra trạng thái thanh toán, adapter MoMo/ZaloPay và trang quản trị **Kết nối API**. Đồng bộ lịch nhà xe từ feed JSON có xem trước, kiểm tra lại khi áp dụng và cập nhật chuyến theo mã đối tác, không nhập trùng. Xem cấu hình và hợp đồng dữ liệu trong [API](docs/api.md).
+
 **Nguồn dữ liệu:** bản kiểm thử có 22 nhà xe minh họa, 26 địa điểm, 60 tuyến hai chiều, 4 loại xe và 7.200 lượt khởi hành trên 30 ngày. Lịch được bổ sung theo ngày khi khởi động lại. Giờ, giá, tồn ghế và nhà xe mẫu không phải dữ liệu bán vé trực tiếp của Vexere. Khi có nhà xe hợp tác, nhập kho vé được xác nhận bằng CSV/JSON trong trang quản trị.
 
 ## Chạy ngay trên Windows
@@ -62,6 +64,8 @@ Thanh toán tại nhà xe tạo đặt chỗ **chưa thanh toán**. Nhân viên 
 
 VNPAY chỉ hiện khả dụng khi được cấu hình. Backend tạo URL có chữ ký HMAC-SHA512 và chỉ ghi nhận tiền qua IPN đã xác minh chữ ký, mã đơn, số tiền và trạng thái giao dịch. Không có nút thanh toán giả. Hủy vé đã thu tiền chuyển sang chờ hoàn tiền để đối soát.
 
+MoMo (`captureWallet`) và ZaloPay có adapter tạo thanh toán, lưu mã đơn merchant/URL, kiểm tra callback HMAC và ghi nhận tiền trong giao dịch. Cổng chỉ hiện khi có cấu hình hợp lệ. Có thể tiếp tục thanh toán từ vé đang chờ; mất phản hồi cổng không tạo thêm đơn thu tiền. Mẫu cấu hình dùng sandbox chính thức; cần merchant thật và callback public trước khi vận hành. Đợt này kiểm thử bằng cổng giả lập, chưa giao dịch với merchant thực.
+
 ## Chạy với PostgreSQL và Docker
 
 Điền `.env` theo `.env.example`, đặt `POSTGRES_PASSWORD` và `SESSION_SECRET` của bạn:
@@ -78,9 +82,9 @@ Nếu bạn có PostgreSQL sẵn, đặt `DATABASE_URL=postgresql://user:passwor
 
 Bạn đã chọn chuẩn bị hệ thống trước khi có đối tác nhà xe. Để đưa vào vận hành cần:
 
-1. Lịch/giá/quyền bán và kho ghế được nhà xe xác nhận. Website chưa kết nối API Vexere hoặc API nhà xe.
+1. Lịch/giá/quyền bán và kho ghế được nhà xe xác nhận. Đã có adapter feed lịch JSON chuẩn hóa; chưa kết nối API Vexere hoặc nhà xe thực tế vì chưa có đối tác. Chỉ dùng kho ghế được phân bổ riêng; đồng bộ ghế đa kênh cần tài liệu API giữ/đặt/hủy của đối tác.
 2. PostgreSQL vận hành riêng; `NODE_ENV=production`, `SEED_DEMO=false`, `APP_URL` HTTPS, `SESSION_SECRET` mạnh và tài khoản quản trị riêng.
-3. SMTP để gửi email thực và tài khoản merchant nếu dùng VNPAY. Không đưa khóa vào mã nguồn.
+3. SMTP để gửi email thực và tài khoản merchant nếu dùng VNPAY/MoMo/ZaloPay. Không đưa khóa vào mã nguồn.
 4. Tên miền/HTTPS và máy chủ triển khai. Kết nối API đồng bộ tồn ghế cần được viết theo hợp đồng/schema của đối tác thực tế.
 
 Production từ chối cấu hình thiếu, seed mẫu và cổng sandbox dùng như cổng thật. Chuyến mẫu không được phép tạo vé bán thật. Xem [hướng dẫn vận hành](docs/operations.md) để nhập lịch, đối soát và cấu hình callback.
@@ -95,6 +99,8 @@ npm run test:ui
 npm run test:ui:advanced
 npm run test:ui:regression
 npm run test:ui:admin
+npm run test:ui:api
+npm run test:ui:integrations
 npm run pack:project
 ```
 
